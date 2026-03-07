@@ -37,25 +37,26 @@
         <div class="content-area">
             <img src="minecraftlogo.png" class="mc-logo-img" alt="Minecraft Logo">
     
-            <div id="btn-play-main" class="btn-mc btn-play" onclick="launchGame()">PLAY</div>
+            <div id="btn-play-main" class="btn-mc btn-play nav-item" onclick="launchGame()" tabindex="0">PLAY</div>
     
             <div class="version-row">
                 <span class="version-label">Version:</span>
-                <div class="version-select-box">
+                <div id="version-select-box" class="version-select-box nav-item" tabindex="0">
                     <span id="current-version-display">Loading...</span>
                     <div class="select-arrow">▼</div>
                     <select id="version-select" class="hidden-select" onchange="updateSelectedRelease()">
                         <option>Loading...</option>
                     </select>
                 </div>
-                <div id="btn-check-update" class="btn-mc btn-mini" onclick="checkForUpdatesManual()" title="Check for Updates">
+                <div id="btn-check-update" class="btn-mc btn-mini nav-item" onclick="checkForUpdatesManual()" title="Check for Updates" tabindex="0">
                     <img src="restart.png" alt="Update">
                 </div>
             </div>
     
             <div class="flex gap-4 w-[500px] max-w-[90%]">
-                <div class="btn-mc flex-grow" id="btn-profile" onclick="toggleProfile(true)">PROFILE</div>
-                <div class="btn-mc flex-grow" id="btn-options" onclick="toggleOptions(true)">OPTIONS</div>
+                <div class="btn-mc flex-grow nav-item" id="btn-profile" onclick="toggleProfile(true)" tabindex="0">PROFILE</div>
+                <div class="btn-mc flex-grow nav-item" id="btn-servers" onclick="toggleServers(true)" tabindex="0">SERVERS</div>
+                <div class="btn-mc flex-grow nav-item" id="btn-options" onclick="toggleOptions(true)" tabindex="0">OPTIONS</div>
             </div>
     
             <div class="progress-container" id="progress-container">
@@ -67,23 +68,55 @@
         </div>
     </div>
 
+    <div class="modal-overlay" id="servers-modal">
+        <div class="modal-box" style="width: 850px;">
+            <div class="modal-title">CUSTOM SERVERS</div>
+
+            <div id="servers-list-container" class="w-full max-h-[300px] overflow-y-auto mb-6 border-2 border-[#555] bg-black p-2">
+                <!-- Servers will be listed here -->
+                <div class="text-center text-gray-400 py-4">No servers added yet.</div>
+            </div>
+
+            <div class="grid grid-cols-3 gap-4 w-full mb-4">
+                <div class="mc-input-group !mb-0">
+                    <label class="mc-label">Name:</label>
+                    <input type="text" id="server-name-input" class="mc-input nav-item" placeholder="My Server" tabindex="0">
+                </div>
+                <div class="mc-input-group !mb-0">
+                    <label class="mc-label">IP/Host:</label>
+                    <input type="text" id="server-ip-input" class="mc-input nav-item" placeholder="127.0.0.1" tabindex="0">
+                </div>
+                <div class="mc-input-group !mb-0">
+                    <label class="mc-label">Port:</label>
+                    <input type="text" id="server-port-input" class="mc-input nav-item" placeholder="25565" tabindex="0">
+                </div>
+            </div>
+
+            <div class="btn-mc w-full !mb-6 nav-item" id="btn-add-server" onclick="addServer()" tabindex="0">ADD SERVER</div>
+
+            <div class="flex justify-center w-full">
+                <div id="btn-servers-done" class="btn-mc nav-item" onclick="toggleServers(false)" tabindex="0">DONE</div>
+            </div>
+        </div>
+    </div>
+
     <div class="modal-overlay" id="options-modal">
         <div class="modal-box">
             <div class="modal-title">LAUNCHER OPTIONS</div>
 
             <div class="mc-input-group">
                 <label class="mc-label">GitHub Repository Source:</label>
-                <input type="text" id="repo-input" class="mc-input" placeholder="user/repo">
+                <input type="text" id="repo-input" class="mc-input nav-item" placeholder="user/repo" tabindex="0">
             </div>
 
             <div class="mc-input-group">
                 <label class="mc-label">Client Executable Name:</label>
-                <input type="text" id="exec-input" class="mc-input" placeholder="Minecraft.Client.exe">
+                <input type="text" id="exec-input" class="mc-input nav-item" placeholder="Minecraft.Client.exe" tabindex="0">
             </div>
 
             <div id="compat-option-container" class="mc-input-group" style="display: none;">
                 <label class="mc-label">Compatibility Layer (Linux):</label>
-                <div id="compat-select-box" class="version-select-box" style="width: 100%; height: 48px; margin-top: 8px;">
+                <div id="compat-select-box" class="version-select-box nav-item" style="width: 100%; height: 48px; margin-top: 8px;" tabindex="0">
                     <span id="current-compat-display">Default (Direct)</span>
                     <div class="select-arrow" style="height: 44px;">▼</div>
                     <select id="compat-select" class="hidden-select" onchange="updateCompatDisplay()">
@@ -95,24 +128,24 @@
             <div class="grid grid-cols-2 gap-4 w-full mt-2">
                 <div class="mc-input-group">
                     <label class="mc-label">Connect/Bind IP:</label>
-                    <input type="text" id="ip-input" class="mc-input" placeholder="Optional">
+                    <input type="text" id="ip-input" class="mc-input nav-item" placeholder="Optional" tabindex="0">
                 </div>
                 <div class="mc-input-group">
                     <label class="mc-label">Port:</label>
-                    <input type="text" id="port-input" class="mc-input" placeholder="Optional">
+                    <input type="text" id="port-input" class="mc-input nav-item" placeholder="Optional" tabindex="0">
                 </div>
             </div>
 
             <div class="mc-input-group">
                 <label class="mc-label" style="display: flex; align-items: center; cursor: pointer;">
-                    <input type="checkbox" id="server-checkbox" style="width: 24px; height: 24px; margin-right: 12px; cursor: pointer;">
+                    <input type="checkbox" id="server-checkbox" class="nav-item" style="width: 24px; height: 24px; margin-right: 12px; cursor: pointer;" tabindex="0">
                     Launch as Headless Server (-server)
                 </label>
             </div>
 
             <div class="flex gap-4 w-full mt-4">
-                <div id="btn-options-done" class="btn-mc flex-grow" onclick="saveOptions()">DONE</div>
-                <div id="btn-options-cancel" class="btn-mc flex-grow" onclick="toggleOptions(false)">CANCEL</div>
+                <div id="btn-options-done" class="btn-mc flex-grow nav-item" onclick="saveOptions()" tabindex="0">DONE</div>
+                <div id="btn-options-cancel" class="btn-mc flex-grow nav-item" onclick="toggleOptions(false)" tabindex="0">CANCEL</div>
             </div>
         </div>
     </div>
@@ -123,7 +156,7 @@
 
             <div class="mc-input-group">
                 <label class="mc-label">In-Game Username:</label>
-                <input type="text" id="username-input" class="mc-input" placeholder="Steve">
+                <input type="text" id="username-input" class="mc-input nav-item" placeholder="Steve" tabindex="0">
             </div>
 
             <div class="mc-input-group mt-4">
@@ -132,8 +165,8 @@
             </div>
 
             <div class="flex gap-4 w-full mt-4">
-                <div id="btn-profile-save" class="btn-mc flex-grow" onclick="saveProfile()">SAVE</div>
-                <div id="btn-profile-cancel" class="btn-mc flex-grow" onclick="toggleProfile(false)">CANCEL</div>
+                <div id="btn-profile-save" class="btn-mc flex-grow nav-item" onclick="saveProfile()" tabindex="0">SAVE</div>
+                <div id="btn-profile-cancel" class="btn-mc flex-grow nav-item" onclick="toggleProfile(false)" tabindex="0">CANCEL</div>
             </div>
         </div>
     </div>
@@ -146,8 +179,8 @@
                 A new version is available. Would you like to update now?
             </div>
             <div class="flex gap-4 w-full">
-                <div class="btn-mc flex-grow" id="btn-confirm-update">UPDATE NOW</div>
-                <div class="btn-mc flex-grow" id="btn-skip-update">LATER</div>
+                <div class="btn-mc flex-grow nav-item" id="btn-confirm-update">UPDATE NOW</div>
+                <div class="btn-mc flex-grow nav-item" id="btn-skip-update">LATER</div>
             </div>
         </div>
     </div>

@@ -27,6 +27,272 @@ const Store = {
     }
 };
 
+// Gamepad Controller Support
+const GamepadManager = {
+    active: false,
+    lastInputTime: 0,
+    COOLDOWN: 180,
+    loopStarted: false,
+    lastAPressed: false,
+
+    init() {
+        window.addEventListener("gamepadconnected", () => {
+            if (!this.active) {
+                this.startLoop();
+            }
+        });
+        this.startLoop();
+    },
+
+    startLoop() {
+        if (this.loopStarted) return;
+        this.loopStarted = true;
+        const loop = () => {
+            try {
+                this.poll();
+            } catch (e) {
+                console.error("Gamepad poll error:", e);
+            }
+            requestAnimationFrame(loop);
+        };
+        loop();
+    },
+
+    poll() {
+        const gamepads = navigator.getGamepads();
+        let gp = null;
+        for (let i = 0; i < gamepads.length; i++) {
+            if (gamepads[i] && gamepads[i].connected && gamepads[i].buttons.length > 0) {
+                gp = gamepads[i];
+                break;
+            }
+        }
+
+        if (!gp) {
+            if (this.active) {
+                this.active = false;
+                showToast("Controller Disconnected");
+            }
+            return;
+        }
+
+        if (!this.active) {
+            this.active = true;
+            showToast("Controller Connected");
+            if (!document.activeElement || !document.activeElement.classList.contains('nav-item')) {
+                this.focusFirstVisible();
+            }
+        }
+
+        const now = Date.now();
+        const buttons = gp.buttons;
+        const axes = gp.axes;
+
+        // Helper to safely get button state
+        const isPressed = (idx) => buttons[idx] ? buttons[idx].pressed : false;
+        const getAxis = (idx) => axes[idx] !== undefined ? axes[idx] : 0;
+
+        if (now - this.lastInputTime > this.COOLDOWN) {
+            const threshold = 0.5;
+            const axisX = getAxis(0);
+            const axisY = getAxis(1);
+            
+            // D-pad indices are usually 12, 13, 14, 15
+            const up = isPressed(12) || axisY < -threshold;
+            const down = isPressed(13) || axisY > threshold;
+            const left = isPressed(14) || axisX < -threshold;
+            const right = isPressed(15) || axisX > threshold;
+
+            if (up) { this.navigate('up'); this.lastInputTime = now; }
+            else if (down) { this.navigate('down'); this.lastInputTime = now; }
+            else if (left) { this.navigate('left'); this.lastInputTime = now; }
+            else if (right) { this.navigate('right'); this.lastInputTime = now; }
+            
+            // Shoulder buttons (L1/R1 are 4/5)
+            else if (isPressed(4)) { this.cycleActiveSelection(-1); this.lastInputTime = now; }
+            else if (isPressed(5)) { this.cycleActiveSelection(1); this.lastInputTime = now; }
+            
+            // B Button (Cancel)
+            else if (isPressed(1)) { this.cancelCurrent(); this.lastInputTime = now; }
+
+            // X Button (Refresh)
+            else if (isPressed(2)) { checkForUpdatesManual(); this.lastInputTime = now; }
+        }
+
+        // A Button (Confirm) - Immediate responsive check
+        const aPressed = isPressed(0);
+        if (aPressed && !this.lastAPressed) {
+            this.clickActive();
+        }
+        this.lastAPressed = aPressed;
+
+        // Right stick for scrolling (Axis 2/3 or 5)
+        const rStickY = getAxis(3) || getAxis(2) || getAxis(5);
+        if (Math.abs(rStickY) > 0.1) {
+            this.scrollActive(rStickY * 15);
+        }
+    },
+
+    focusFirstVisible() {
+        const visibleItems = this.getVisibleNavItems();
+        if (visibleItems.length > 0) visibleItems[0].focus();
+    },
+
+    getVisibleNavItems() {
+        // Find if any modal is open
+        const modals = ['update-modal', 'options-modal', 'profile-modal', 'servers-modal'];
+        let activeModal = null;
+        for (const id of modals) {
+            const m = document.getElementById(id);
+            if (m && m.style.display === 'flex') {
+                activeModal = m;
+                break;
+            }
+        }
+
+        const allItems = Array.from(document.querySelectorAll('.nav-item'));
+        return allItems.filter(item => {
+            if (activeModal) {
+                return activeModal.contains(item) && item.offsetParent !== null;
+            }
+            // Ensure item is not inside any hidden modal
+            let parent = item.parentElement;
+            while (parent) {
+                if (parent.classList?.contains('modal-overlay') && parent.style.display !== 'flex') return false;
+                parent = parent.parentElement;
+            }
+            return item.offsetParent !== null;
+        });
+    },
+
+    navigate(direction) {
+        const current = document.activeElement;
+        const items = this.getVisibleNavItems();
+
+        if (!items.includes(current)) {
+            items[0]?.focus();
+            return;
+        }
+
+        const currentRect = current.getBoundingClientRect();
+        const cx = currentRect.left + currentRect.width / 2;
+        const cy = currentRect.top + currentRect.height / 2;
+
+        let bestMatch = null;
+        let minScore = Infinity;
+
+        items.forEach(item => {
+            if (item === current) return;
+            const rect = item.getBoundingClientRect();
+            const ix = rect.left + rect.width / 2;
+            const iy = rect.top + rect.height / 2;
+
+            const dx = ix - cx;
+            const dy = iy - cy;
+            const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+
+            let inDirection = false;
+            if (direction === 'right' && angle >= -45 && angle <= 45) inDirection = true;
+            if (direction === 'left' && (angle >= 135 || angle <= -135)) inDirection = true;
+            if (direction === 'down' && angle > 45 && angle < 135) inDirection = true;
+            if (direction === 'up' && angle < -45 && angle > -135) inDirection = true;
+
+            if (inDirection) {
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                const penalty = (direction === 'left' || direction === 'right') ? Math.abs(dy) * 2.5 : Math.abs(dx) * 2.5;
+                const score = distance + penalty;
+
+                if (score < minScore) {
+                    minScore = score;
+                    bestMatch = item;
+                }
+            }
+        });
+
+        if (bestMatch) {
+            bestMatch.focus();
+            bestMatch.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+    },
+
+    clickActive() {
+        const active = document.activeElement;
+        if (active && active.classList.contains('nav-item')) {
+            active.classList.add('active-bump');
+            setTimeout(() => active.classList.remove('active-bump'), 100);
+            
+            if (active.tagName === 'INPUT' && active.type === 'checkbox') {
+                active.checked = !active.checked;
+                active.dispatchEvent(new Event('change'));
+            } else {
+                active.click();
+            }
+        }
+    },
+
+    cancelCurrent() {
+        const activeModal = this.getActiveModal();
+        if (activeModal) {
+            if (activeModal.id === 'options-modal') toggleOptions(false);
+            else if (activeModal.id === 'profile-modal') toggleProfile(false);
+            else if (activeModal.id === 'servers-modal') toggleServers(false);
+            else if (activeModal.id === 'update-modal') document.getElementById('btn-skip-update')?.click();
+        }
+    },
+
+    getActiveModal() {
+        const modals = ['update-modal', 'options-modal', 'profile-modal', 'servers-modal'];
+        for (const id of modals) {
+            const m = document.getElementById(id);
+            if (m && m.style.display === 'flex') return m;
+        }
+        return null;
+    },
+
+    cycleActiveSelection(dir) {
+        const active = document.activeElement;
+        if (active && active.id === 'version-select-box') {
+            const select = document.getElementById('version-select');
+            if (select) {
+                let newIdx = select.selectedIndex + dir;
+                if (newIdx < 0) newIdx = select.options.length - 1;
+                if (newIdx >= select.options.length) newIdx = 0;
+                select.selectedIndex = newIdx;
+                updateSelectedRelease();
+            }
+        } else if (active && active.id === 'compat-select-box') {
+            const select = document.getElementById('compat-select');
+            if (select) {
+                let newIdx = select.selectedIndex + dir;
+                if (newIdx < 0) newIdx = select.options.length - 1;
+                if (newIdx >= select.options.length) newIdx = 0;
+                select.selectedIndex = newIdx;
+                updateCompatDisplay();
+            }
+        } else if (!this.getActiveModal()) {
+            // Shortcut for version cycle on main menu
+            const select = document.getElementById('version-select');
+            if (select) {
+                let newIdx = select.selectedIndex + dir;
+                if (newIdx < 0) newIdx = select.options.length - 1;
+                if (newIdx >= select.options.length) newIdx = 0;
+                select.selectedIndex = newIdx;
+                updateSelectedRelease();
+            }
+        }
+    },
+
+    scrollActive(val) {
+        const serverList = document.getElementById('servers-list-container');
+        if (this.getActiveModal()?.id === 'servers-modal' && serverList) {
+            serverList.scrollTop += val;
+        } else if (!this.getActiveModal()) {
+            const sidebar = document.getElementById('updates-list')?.parentElement;
+            if (sidebar) sidebar.scrollTop += val;
+        }
+    }
+};
+
 window.onload = async () => {
     document.getElementById('repo-input').value = await Store.get('legacy_repo', DEFAULT_REPO);
     document.getElementById('exec-input').value = await Store.get('legacy_exec_path', DEFAULT_EXEC);
@@ -586,6 +852,7 @@ async function handleElectronFlow(url) {
             'servers.txt',
             'username.txt',
             'settings.dat',
+            'UID.dat',
             path.join('Windows64', 'GameHDD')
         ];
 
@@ -722,6 +989,138 @@ async function toggleProfile(show) {
     }
 }
 
+async function toggleServers(show) {
+    if (isProcessing) return;
+    const modal = document.getElementById('servers-modal');
+    if (show) {
+        await loadServers();
+        modal.style.display = 'flex';
+        modal.style.opacity = '1';
+    } else {
+        modal.style.opacity = '0';
+        setTimeout(() => modal.style.display = 'none', 300);
+    }
+}
+
+async function getServersFilePath() {
+    const fullPath = await getInstalledPath();
+    return path.join(path.dirname(fullPath), 'servers.txt');
+}
+
+async function loadServers() {
+    const filePath = await getServersFilePath();
+    const container = document.getElementById('servers-list-container');
+    container.innerHTML = '';
+
+    if (!fs.existsSync(filePath)) {
+        container.innerHTML = '<div class="text-center text-gray-400 py-4">No servers added yet.</div>';
+        return;
+    }
+
+    try {
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const lines = content.split('\n').map(l => l.trim()).filter(l => l !== '');
+        const servers = [];
+
+        for (let i = 0; i < lines.length; i += 3) {
+            if (lines[i] && lines[i+1] && lines[i+2]) {
+                servers.push({
+                    ip: lines[i],
+                    port: lines[i+1],
+                    name: lines[i+2]
+                });
+            }
+        }
+
+        if (servers.length === 0) {
+            container.innerHTML = '<div class="text-center text-gray-400 py-4">No servers added yet.</div>';
+            return;
+        }
+
+        servers.forEach((s, index) => {
+            const item = document.createElement('div');
+            item.className = 'flex justify-between items-center p-3 border-b border-[#333] hover:bg-[#111]';
+            item.innerHTML = `
+                <div class="flex flex-col">
+                    <span class="text-white text-xl">${s.name}</span>
+                    <span class="text-gray-400 text-sm">${s.ip}:${s.port}</span>
+                </div>
+                <div class="btn-mc !w-[100px] !h-[40px] !text-lg !mb-0" onclick="removeServer(${index})">DELETE</div>
+            `;
+            container.appendChild(item);
+        });
+    } catch (e) {
+        console.error("Failed to load servers:", e);
+        container.innerHTML = '<div class="text-center text-red-400 py-4">Error loading servers.</div>';
+    }
+}
+
+async function addServer() {
+    const nameInput = document.getElementById('server-name-input');
+    const ipInput = document.getElementById('server-ip-input');
+    const portInput = document.getElementById('server-port-input');
+
+    const name = nameInput.value.trim();
+    const ip = ipInput.value.trim();
+    const port = portInput.value.trim() || "25565";
+
+    if (!name || !ip) {
+        showToast("Name and IP are required!");
+        return;
+    }
+
+    const filePath = await getServersFilePath();
+    const serverEntry = `${ip}\n${port}\n${name}\n`;
+
+    try {
+        const dir = path.dirname(filePath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        
+        fs.appendFileSync(filePath, serverEntry);
+        
+        nameInput.value = '';
+        ipInput.value = '';
+        portInput.value = '';
+        
+        showToast("Server Added!");
+        loadServers();
+    } catch (e) {
+        showToast("Failed to save server: " + e.message);
+    }
+}
+
+async function removeServer(index) {
+    const filePath = await getServersFilePath();
+    try {
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const lines = content.split('\n').map(l => l.trim()).filter(l => l !== '');
+        const servers = [];
+
+        for (let i = 0; i < lines.length; i += 3) {
+            if (lines[i] && lines[i+1] && lines[i+2]) {
+                servers.push({
+                    ip: lines[i],
+                    port: lines[i+1],
+                    name: lines[i+2]
+                });
+            }
+        }
+
+        servers.splice(index, 1);
+
+        let newContent = "";
+        servers.forEach(s => {
+            newContent += `${s.ip}\n${s.port}\n${s.name}\n`;
+        });
+
+        fs.writeFileSync(filePath, newContent);
+        loadServers();
+        showToast("Server Removed");
+    } catch (e) {
+        showToast("Failed to remove server: " + e.message);
+    }
+}
+
 async function updatePlaytimeDisplay() {
     const el = document.getElementById('playtime-display');
     const playtime = await Store.get('legacy_playtime', 0);
@@ -785,189 +1184,11 @@ window.closeWindow = closeWindow;
 window.launchGame = launchGame;
 window.updateSelectedRelease = updateSelectedRelease;
 window.toggleProfile = toggleProfile;
+window.toggleServers = toggleServers;
+window.addServer = addServer;
+window.removeServer = removeServer;
 window.toggleOptions = toggleOptions;
 window.saveOptions = saveOptions;
 window.saveProfile = saveProfile;
 window.updateCompatDisplay = updateCompatDisplay;
 window.checkForUpdatesManual = checkForUpdatesManual;
-
-// Gamepad Controller Support
-const GamepadManager = {
-    active: false,
-    focusedIndex: 0,
-    currentGroup: 'main',
-    lastA: false,
-    lastUp: false,
-    lastDown: false,
-    lastLeft: false,
-    lastRight: false,
-    groups: {
-        main: ['btn-play-main', 'version-select-box', 'btn-profile', 'btn-options'],
-        options: ['repo-input', 'exec-input', 'compat-select-box', 'ip-input', 'port-input', 'server-checkbox', 'btn-options-done', 'btn-options-cancel'],
-        profile: ['username-input', 'btn-profile-save', 'btn-profile-cancel'],
-        update: ['btn-confirm-update', 'btn-skip-update']
-    },
-
-    init() {
-        window.addEventListener("gamepadconnected", (e) => {
-            console.log("Gamepad connected:", e.gamepad.id);
-            if (!this.active) {
-                this.active = true;
-                this.startLoop();
-                showToast("Controller Connected");
-            }
-        });
-
-        // Check for already connected gamepad
-        const gamepads = navigator.getGamepads();
-        if (gamepads[0]) {
-            this.active = true;
-            this.startLoop();
-        }
-    },
-
-    startLoop() {
-        const loop = () => {
-            this.poll();
-            requestAnimationFrame(loop);
-        };
-        loop();
-    },
-
-    poll() {
-        const gamepads = navigator.getGamepads();
-        const gp = gamepads[0]; // Use first controller
-        if (!gp) return;
-
-        // Determine current group based on visible modals
-        if (document.getElementById('update-modal').style.display === 'flex') {
-            if (this.currentGroup !== 'update') { this.currentGroup = 'update'; this.focusedIndex = 0; }
-        } else if (document.getElementById('options-modal').style.display === 'flex') {
-            if (this.currentGroup !== 'options') { this.currentGroup = 'options'; this.focusedIndex = 0; }
-        } else if (document.getElementById('profile-modal').style.display === 'flex') {
-            if (this.currentGroup !== 'profile') { this.currentGroup = 'profile'; this.focusedIndex = 0; }
-        } else {
-            if (this.currentGroup !== 'main') { this.currentGroup = 'main'; this.focusedIndex = 0; }
-        }
-
-        const buttons = gp.buttons;
-        const axes = gp.axes;
-
-        // A Button (Button 0)
-        const aPressed = buttons[0].pressed;
-        if (aPressed && !this.lastA) {
-            this.clickFocused();
-        }
-        this.lastA = aPressed;
-
-        // Navigation (D-Pad or Left Stick)
-        const up = buttons[12].pressed || axes[1] < -0.5;
-        const down = buttons[13].pressed || axes[1] > 0.5;
-        const left = buttons[14].pressed || axes[0] < -0.5;
-        const right = buttons[15].pressed || axes[0] > 0.5;
-
-        if (up && !this.lastUp) this.moveFocus(-1);
-        if (down && !this.lastDown) this.moveFocus(1);
-        
-        // Horizontal navigation for side-by-side buttons
-        if (this.currentGroup === 'main' && this.focusedIndex >= 2) {
-            if (left && !this.lastLeft) this.moveFocus(-1);
-            if (right && !this.lastRight) this.moveFocus(1);
-        } else if (this.currentGroup === 'options' && this.focusedIndex >= 6) {
-            if (left && !this.lastLeft) this.moveFocus(-1);
-            if (right && !this.lastRight) this.moveFocus(1);
-        } else if (this.currentGroup === 'profile' && this.focusedIndex >= 1) {
-            if (left && !this.lastLeft) this.moveFocus(-1);
-            if (right && !this.lastRight) this.moveFocus(1);
-        }
-
-        // Special case: Version selection cycling with Left/Right
-        if (this.currentGroup === 'main' && this.focusedIndex === 1) {
-            if (left && !this.lastLeft) this.cycleVersion(-1);
-            if (right && !this.lastRight) this.cycleVersion(1);
-        }
-
-        // Special case: Compatibility selection cycling with Left/Right
-        if (this.currentGroup === 'options' && this.focusedIndex === 2) {
-            if (left && !this.lastLeft) this.cycleCompat(-1);
-            if (right && !this.lastRight) this.cycleCompat(1);
-        }
-
-        this.lastUp = up;
-        this.lastDown = down;
-        this.lastLeft = left;
-        this.lastRight = right;
-
-        this.updateVisualFocus();
-    },
-
-    moveFocus(dir) {
-        const group = this.groups[this.currentGroup];
-        // Skip hidden elements (like compat-select-box on Windows)
-        let nextIndex = (this.focusedIndex + dir + group.length) % group.length;
-        let el = document.getElementById(group[nextIndex]);
-        
-        // Safety to prevent infinite loop if everything is hidden (unlikely)
-        let attempts = 0;
-        while ((!el || el.offsetParent === null) && attempts < group.length) {
-            nextIndex = (nextIndex + dir + group.length) % group.length;
-            el = document.getElementById(group[nextIndex]);
-            attempts++;
-        }
-        
-        this.focusedIndex = nextIndex;
-    },
-
-    cycleVersion(dir) {
-        const select = document.getElementById('version-select');
-        if (select && select.options.length > 0) {
-            let newIndex = select.selectedIndex + dir;
-            if (newIndex < 0) newIndex = select.options.length - 1;
-            if (newIndex >= select.options.length) newIndex = 0;
-            select.selectedIndex = newIndex;
-            updateSelectedRelease();
-        }
-    },
-
-    cycleCompat(dir) {
-        const select = document.getElementById('compat-select');
-        if (select && select.options.length > 0) {
-            let newIndex = select.selectedIndex + dir;
-            if (newIndex < 0) newIndex = select.options.length - 1;
-            if (newIndex >= select.options.length) newIndex = 0;
-            select.selectedIndex = newIndex;
-            updateCompatDisplay();
-        }
-    },
-
-    updateVisualFocus() {
-        const group = this.groups[this.currentGroup];
-        group.forEach((id, idx) => {
-            const el = document.getElementById(id);
-            if (el) {
-                if (idx === this.focusedIndex) {
-                    el.classList.add('focused');
-                    if (el.tagName === 'INPUT') el.focus();
-                } else {
-                    el.classList.remove('focused');
-                    if (el.tagName === 'INPUT') el.blur();
-                }
-            }
-        });
-    },
-
-    clickFocused() {
-        const group = this.groups[this.currentGroup];
-        const id = group[this.focusedIndex];
-        const el = document.getElementById(id);
-        if (el) {
-            if (el.tagName === 'INPUT' && el.type === 'checkbox') {
-                el.checked = !el.checked;
-            } else {
-                el.click();
-            }
-        }
-    }
-};
-
-GamepadManager.init();

@@ -112,6 +112,43 @@ body {
     overflow-y: auto;
     z-index: 10;
     backdrop-filter: blur(8px);
+    transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1), padding 0.3s ease;
+}
+
+.sidebar.collapsed {
+    width: 80px;
+    padding: 30px 10px;
+}
+
+.sidebar.collapsed #updates-list {
+    display: none;
+}
+
+.sidebar.collapsed .sidebar-title {
+    border-bottom: none;
+    margin-bottom: 0;
+    justify-content: center;
+    padding-bottom: 0;
+}
+
+.sidebar.collapsed #sidebar-title-text {
+    display: none;
+}
+
+.sidebar.collapsed #sidebar-toggle-icon {
+    font-size: 32px;
+}
+
+#sidebar-toggle-icon {
+    font-size: 24px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: transform 0.2s, color 0.2s;
+}
+
+#sidebar-toggle-icon:hover {
+    color: #55ff55;
+    transform: scale(1.1);
 }
 
 .sidebar-title {
@@ -119,9 +156,12 @@ body {
     color: #fff;
     text-shadow: 2px 2px 0 #000;
     margin-bottom: 25px;
-    text-align: center;
     border-bottom: 2px solid #555;
     padding-bottom: 15px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
 }
 
 .commit-author {

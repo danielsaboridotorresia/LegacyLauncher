@@ -10,12 +10,15 @@ const DEFAULT_EXEC = "Minecraft.Client.exe";
 const TARGET_FILE = "LCEWindows64.zip";
 const LAUNCHER_REPO = "gradenGnostic/LegacyLauncher";
 
+let instances = [];
+let currentInstanceId = null;
+let currentInstance = null;
+
 let releasesData = [];
 let commitsData = [];
 let currentReleaseIndex = 0;
 let isProcessing = false;
 let isGameRunning = false;
-
 
 const Store = {
     async get(key, defaultValue) {
@@ -91,7 +94,6 @@ const GamepadManager = {
         const buttons = gp.buttons;
         const axes = gp.axes;
 
-        // Helper to safely get button state
         const isPressed = (idx) => buttons[idx] ? buttons[idx].pressed : false;
         const getAxis = (idx) => axes[idx] !== undefined ? axes[idx] : 0;
 
@@ -100,7 +102,6 @@ const GamepadManager = {
             const axisX = getAxis(0);
             const axisY = getAxis(1);
             
-            // D-pad indices are usually 12, 13, 14, 15
             const up = isPressed(12) || axisY < -threshold;
             const down = isPressed(13) || axisY > threshold;
             const left = isPressed(14) || axisX < -threshold;
@@ -111,25 +112,20 @@ const GamepadManager = {
             else if (left) { this.navigate('left'); this.lastInputTime = now; }
             else if (right) { this.navigate('right'); this.lastInputTime = now; }
             
-            // Shoulder buttons (L1/R1 are 4/5)
             else if (isPressed(4)) { this.cycleActiveSelection(-1); this.lastInputTime = now; }
             else if (isPressed(5)) { this.cycleActiveSelection(1); this.lastInputTime = now; }
             
-            // B Button (Cancel)
             else if (isPressed(1)) { this.cancelCurrent(); this.lastInputTime = now; }
 
-            // X Button (Refresh)
             else if (isPressed(2)) { checkForUpdatesManual(); this.lastInputTime = now; }
         }
 
-        // A Button (Confirm) - Immediate responsive check
         const aPressed = isPressed(0);
         if (aPressed && !this.lastAPressed) {
             this.clickActive();
         }
         this.lastAPressed = aPressed;
 
-        // Right stick for scrolling (Axis 2/3 or 5)
         const rStickY = getAxis(3) || getAxis(2) || getAxis(5);
         if (Math.abs(rStickY) > 0.1) {
             this.scrollActive(rStickY * 15);
@@ -142,8 +138,7 @@ const GamepadManager = {
     },
 
     getVisibleNavItems() {
-        // Find if any modal is open
-        const modals = ['update-modal', 'options-modal', 'profile-modal', 'servers-modal'];
+        const modals = ['update-modal', 'options-modal', 'profile-modal', 'servers-modal', 'instances-modal', 'add-instance-modal', 'skin-modal'];
         let activeModal = null;
         for (const id of modals) {
             const m = document.getElementById(id);
@@ -158,7 +153,6 @@ const GamepadManager = {
             if (activeModal) {
                 return activeModal.contains(item) && item.offsetParent !== null;
             }
-            // Ensure item is not inside any hidden modal
             let parent = item.parentElement;
             while (parent) {
                 if (parent.classList?.contains('modal-overlay') && parent.style.display !== 'flex') return false;
@@ -239,12 +233,15 @@ const GamepadManager = {
             if (activeModal.id === 'options-modal') toggleOptions(false);
             else if (activeModal.id === 'profile-modal') toggleProfile(false);
             else if (activeModal.id === 'servers-modal') toggleServers(false);
+            else if (activeModal.id === 'instances-modal') toggleInstances(false);
+            else if (activeModal.id === 'add-instance-modal') toggleAddInstance(false);
             else if (activeModal.id === 'update-modal') document.getElementById('btn-skip-update')?.click();
+            else if (activeModal.id === 'skin-modal') closeSkinManager();
         }
     },
 
     getActiveModal() {
-        const modals = ['update-modal', 'options-modal', 'profile-modal', 'servers-modal'];
+        const modals = ['update-modal', 'options-modal', 'profile-modal', 'servers-modal', 'instances-modal', 'add-instance-modal', 'skin-modal'];
         for (const id of modals) {
             const m = document.getElementById(id);
             if (m && m.style.display === 'flex') return m;
@@ -273,7 +270,6 @@ const GamepadManager = {
                 updateCompatDisplay();
             }
         } else if (!this.getActiveModal()) {
-            // Shortcut for version cycle on main menu
             const select = document.getElementById('version-select');
             if (select) {
                 let newIdx = select.selectedIndex + dir;
@@ -287,8 +283,11 @@ const GamepadManager = {
 
     scrollActive(val) {
         const serverList = document.getElementById('servers-list-container');
+        const instanceList = document.getElementById('instances-list-container');
         if (this.getActiveModal()?.id === 'servers-modal' && serverList) {
             serverList.scrollTop += val;
+        } else if (this.getActiveModal()?.id === 'instances-modal' && instanceList) {
+            instanceList.scrollTop += val;
         } else if (!this.getActiveModal()) {
             const sidebar = document.getElementById('updates-list')?.parentElement;
             if (sidebar) sidebar.scrollTop += val;
@@ -316,7 +315,6 @@ const MusicManager = {
     async scan() {
         try {
             const installDir = await getInstallDir();
-            // Path provided by user: root of games folder in music/music
             const musicPath = path.join(installDir, 'music', 'music');
             
             if (fs.existsSync(musicPath)) {
@@ -325,15 +323,11 @@ const MusicManager = {
                     .filter(f => f.toLowerCase().endsWith('.ogg'))
                     .map(f => path.join(musicPath, f));
                 
-                // Shuffle playlist
                 for (let i = this.playlist.length - 1; i > 0; i--) {
                     const j = Math.floor(Math.random() * (i + 1));
                     [this.playlist[i], this.playlist[j]] = [this.playlist[j], this.playlist[i]];
                 }
-                console.log(`MusicManager: Loaded ${this.playlist.length} tracks.`);
                 return this.playlist.length > 0;
-            } else {
-                console.log("MusicManager: music/music folder not found yet.");
             }
         } catch (e) {
             console.error("Music scan error:", e);
@@ -356,7 +350,6 @@ const MusicManager = {
         
         let nextIndex;
         if (this.playlist.length > 1) {
-            // Keep picking until we get a different track
             do {
                 nextIndex = Math.floor(Math.random() * this.playlist.length);
             } while (nextIndex === this.currentIndex);
@@ -368,7 +361,6 @@ const MusicManager = {
         this.audio.src = `file://${this.playlist[this.currentIndex]}`;
         this.audio.play().catch(e => {
             console.error("Audio playback error:", e);
-            // If failed, try next one
             setTimeout(() => this.playNext(), 1000);
         });
     },
@@ -400,27 +392,65 @@ const MusicManager = {
     }
 };
 
-window.onload = async () => {
-    document.getElementById('repo-input').value = await Store.get('legacy_repo', DEFAULT_REPO);
-    document.getElementById('exec-input').value = await Store.get('legacy_exec_path', DEFAULT_EXEC);
-    document.getElementById('username-input').value = await Store.get('legacy_username', "");
-    document.getElementById('ip-input').value = await Store.get('legacy_ip', "");
-    document.getElementById('port-input').value = await Store.get('legacy_port', "");
-    document.getElementById('server-checkbox').checked = await Store.get('legacy_is_server', false);
+async function migrateLegacyConfig() {
+    const hasInstances = await Store.get('legacy_instances', null);
+    if (!hasInstances) {
+        const repo = await Store.get('legacy_repo', DEFAULT_REPO);
+        const exec = await Store.get('legacy_exec_path', DEFAULT_EXEC);
+        const ip = await Store.get('legacy_ip', "");
+        const port = await Store.get('legacy_port', "");
+        const isServer = await Store.get('legacy_is_server', false);
+        const compat = await Store.get('legacy_compat_layer', 'direct');
+        const installDir = await Store.get('legacy_install_path', path.join(require('os').homedir(), 'Documents', 'LegacyClient'));
+        const installedTag = await Store.get('installed_version_tag', null);
+
+        const defaultInstance = {
+            id: 'instance-' + Date.now(),
+            name: "Default Instance",
+            repo: repo,
+            execPath: exec,
+            ip: ip,
+            port: port,
+            isServer: isServer,
+            compatLayer: compat,
+            installPath: installDir,
+            installedTag: installedTag
+        };
+
+        instances = [defaultInstance];
+        currentInstanceId = defaultInstance.id;
+        await Store.set('legacy_instances', instances);
+        await Store.set('legacy_current_instance_id', currentInstanceId);
+    } else {
+        instances = hasInstances;
+        currentInstanceId = await Store.get('legacy_current_instance_id', instances[0].id);
+    }
     
-    const installDir = await getInstallDir();
-    document.getElementById('install-path-input').value = installDir;
+    currentInstance = instances.find(i => i.id === currentInstanceId) || instances[0];
+}
+
+window.onload = async () => {
+    await migrateLegacyConfig();
+    
+    document.getElementById('repo-input').value = currentInstance.repo;
+    document.getElementById('exec-input').value = currentInstance.execPath;
+    document.getElementById('username-input').value = await Store.get('legacy_username', "");
+    document.getElementById('ip-input').value = currentInstance.ip;
+    document.getElementById('port-input').value = currentInstance.port;
+    document.getElementById('server-checkbox').checked = currentInstance.isServer;
+    document.getElementById('install-path-input').value = currentInstance.installPath;
     
     if (process.platform === 'linux' || process.platform === 'darwin') {
         document.getElementById('compat-option-container').style.display = 'block';
         scanCompatibilityLayers();
     } else {
-        // Force Windows to direct mode if somehow changed
-        await Store.set('legacy_compat_layer', 'direct');
+        currentInstance.compatLayer = 'direct';
+        await saveInstancesToStore();
     }
 
     ipcRenderer.on('window-is-maximized', (event, isMaximized) => {
-        document.getElementById('maximize-btn').textContent = isMaximized ? '❐' : '▢';
+        const btn = document.getElementById('maximize-btn');
+        if (btn) btn.textContent = isMaximized ? '❐' : '▢';
     });
 
     fetchGitHubData();
@@ -436,211 +466,146 @@ window.onload = async () => {
     });
 };
 
-async function loadSplashText() {
-    const splashEl = document.getElementById('splash-text');
-    if (!splashEl) return;
-
-    try {
-        const filePath = path.join(__dirname, 'strings.txt');
-        if (fs.existsSync(filePath)) {
-            const content = fs.readFileSync(filePath, 'utf-8');
-            const lines = content.split('\n').map(l => l.trim()).filter(l => l !== '');
-            if (lines.length > 0) {
-                const randomSplash = lines[Math.floor(Math.random() * lines.length)];
-                splashEl.textContent = randomSplash;
-            }
-        }
-    } catch (e) {
-        console.error("Failed to load splash text:", e);
-        splashEl.textContent = "Welcome!";
-    }
+async function saveInstancesToStore() {
+    await Store.set('legacy_instances', instances);
+    await Store.set('legacy_current_instance_id', currentInstanceId);
 }
 
-function isNewerVersion(latest, current) {
-    const lParts = latest.split('.').map(Number);
-    const cParts = current.split('.').map(Number);
-    for (let i = 0; i < Math.max(lParts.length, cParts.length); i++) {
-        const l = lParts[i] || 0;
-        const c = cParts[i] || 0;
-        if (l > c) return true;
-        if (l < c) return false;
-    }
-    return false;
-}
-
-async function checkForLauncherUpdates(manual = false) {
-    try {
-        const currentVersion = require('./package.json').version;
-        const res = await fetch(`https://api.github.com/repos/${LAUNCHER_REPO}/releases/latest`);
-        if (!res.ok) {
-            if (manual) showToast("Could not check for updates.");
-            return;
-        }
-        
-        const latestRelease = await res.json();
-        const latestVersion = latestRelease.tag_name.replace('v', '');
-        
-        if (isNewerVersion(latestVersion, currentVersion)) {
-            const updateConfirmed = await promptLauncherUpdate(latestRelease.tag_name, latestRelease.body);
-            if (updateConfirmed) {
-                downloadAndInstallLauncherUpdate(latestRelease);
-            }
-        } else if (manual) {
-            showToast("Launcher is up to date!");
-        }
-    } catch (e) {
-        console.error("Launcher update check failed:", e);
-        if (manual) showToast("Update check failed.");
-    }
-}
-
-async function promptLauncherUpdate(version, changelog) {
-    return new Promise((resolve) => {
-        const modal = document.getElementById('update-modal');
-        const confirmBtn = document.getElementById('btn-confirm-update');
-        const skipBtn = document.getElementById('btn-skip-update');
-        const closeBtn = document.getElementById('btn-close-update');
-        const modalText = document.getElementById('update-modal-text');
-
-        if (modalText) {
-            modalText.innerHTML = `<span class="update-tag">NEW UPDATE: v${version}</span><br>` +
-                                 `<div class="pn-body" style="font-size: 16px; max-height: 200px; overflow-y: auto; background: rgba(0,0,0,0.2); padding: 10px; margin-top: 5px;">${changelog || "No changelog provided."}</div>`;
-            modalText.style.display = 'block';
-        }
-
+async function toggleInstances(show) {
+    if (isProcessing) return;
+    const modal = document.getElementById('instances-modal');
+    if (show) {
+        await renderInstancesList();
         document.activeElement?.blur();
         modal.style.display = 'flex';
         modal.style.opacity = '1';
-
-        const cleanup = (result) => {
-            modal.style.opacity = '0';
-            setTimeout(() => {
-                modal.style.display = 'none';
-                if (modalText) modalText.style.display = 'none';
-            }, 300);
-            confirmBtn.onclick = null;
-            skipBtn.onclick = null;
-            closeBtn.onclick = null;
-            resolve(result);
-        };
-
-        confirmBtn.onclick = () => cleanup(true);
-        skipBtn.onclick = () => cleanup(false);
-        closeBtn.onclick = () => cleanup(false);
-    });
+    } else {
+        modal.style.opacity = '0';
+        setTimeout(() => modal.style.display = 'none', 300);
+    }
 }
 
-async function downloadAndInstallLauncherUpdate(release) {
-    setProcessingState(true);
-    updateProgress(0, "Preparing Launcher Update...");
+async function renderInstancesList() {
+    const container = document.getElementById('instances-list-container');
+    container.innerHTML = '';
 
-    let assetPattern = "";
-    if (process.platform === 'win32') assetPattern = ".exe";
-    else if (process.platform === 'linux') assetPattern = ".AppImage";
-    else if (process.platform === 'darwin') assetPattern = ".dmg";
-
-    const asset = release.assets.find(a => a.name.toLowerCase().endsWith(assetPattern));
-    
-    if (!asset) {
-        showToast("No compatible update found for your OS.");
-        setProcessingState(false);
+    if (instances.length === 0) {
+        container.innerHTML = '<div class="text-center text-gray-400 py-4">No instances found.</div>';
         return;
     }
 
-    try {
-        const homeDir = require('os').homedir();
-        const downloadPath = path.join(homeDir, 'Downloads', asset.name);
+    instances.forEach((inst) => {
+        const isActive = inst.id === currentInstanceId;
+        const item = document.createElement('div');
+        item.className = `flex justify-between items-center p-4 border-b border-[#333] hover:bg-[#111] ${isActive ? 'bg-[#1a1a1a] border-l-4 border-l-[#55ff55]' : ''}`;
         
-        updateProgress(10, `Downloading Launcher Update...`);
-        await downloadFile(asset.browser_download_url, downloadPath);
-        
-        updateProgress(100, "Download Complete. Launching Installer...");
-        
-        // Give time for UI update
-        await new Promise(r => setTimeout(r, 1000));
+        item.innerHTML = `
+            <div class="flex flex-col gap-1">
+                <div class="flex items-center gap-2">
+                    <span class="text-white text-xl font-bold">${inst.name}</span>
+                    ${isActive ? '<span class="text-[10px] bg-[#55ff55] text-black px-1 font-bold">ACTIVE</span>' : ''}
+                </div>
+                <span class="text-gray-400 text-sm font-mono">${inst.repo}</span>
+                <span class="text-gray-500 text-xs">${inst.installPath}</span>
+            </div>
+            <div class="flex gap-2">
+                ${!isActive ? `<div class="btn-mc !w-[100px] !h-[40px] !text-lg !mb-0" onclick="switchInstance('${inst.id}')">SWITCH</div>` : ''}
+                <div class="btn-mc !w-[100px] !h-[40px] !text-lg !mb-0" onclick="deleteInstance('${inst.id}')" style="${isActive ? 'opacity: 0.5; pointer-events: none;' : ''}">DELETE</div>
+            </div>
+        `;
+        container.appendChild(item);
+    });
+}
 
-        if (process.platform === 'win32') {
-            childProcess.exec(`start "" "${downloadPath}"`);
-        } else if (process.platform === 'linux') {
-            fs.chmodSync(downloadPath, 0o755);
-            childProcess.exec(`"${downloadPath}"`);
-        } else if (process.platform === 'darwin') {
-            childProcess.exec(`open "${downloadPath}"`);
-        }
-        
-        // Close the app to allow installation
-        setTimeout(() => ipcRenderer.send('window-close'), 2000);
-
-    } catch (e) {
-        showToast("Launcher Update Error: " + e.message);
-        setProcessingState(false);
+function toggleAddInstance(show) {
+    const modal = document.getElementById('add-instance-modal');
+    if (show) {
+        document.getElementById('new-instance-name').value = '';
+        document.getElementById('new-instance-repo').value = DEFAULT_REPO;
+        modal.style.display = 'flex';
+        modal.style.opacity = '1';
+    } else {
+        modal.style.opacity = '0';
+        setTimeout(() => modal.style.display = 'none', 300);
     }
 }
 
-async function scanCompatibilityLayers() {
-    const select = document.getElementById('compat-select');
-    const savedValue = await Store.get('legacy_compat_layer', 'direct');
+function createNewInstance() {
+    toggleAddInstance(true);
+}
+
+async function saveNewInstance() {
+    const name = document.getElementById('new-instance-name').value.trim();
+    const repo = document.getElementById('new-instance-repo').value.trim() || DEFAULT_REPO;
     
-    const layers = [
-        { name: 'Default (Direct)', cmd: 'direct' },
-        { name: 'Wine64', cmd: 'wine64' },
-        { name: 'Wine', cmd: 'wine' }
-    ];
+    if (!name) {
+        showToast("Please enter a name for the instance.");
+        return;
+    }
 
     const homeDir = require('os').homedir();
-    let steamPaths = [];
-    
-    if (process.platform === 'linux') {
-        steamPaths = [
-            path.join(homeDir, '.steam', 'steam', 'steamapps', 'common'),
-            path.join(homeDir, '.local', 'share', 'Steam', 'steamapps', 'common'),
-            path.join(homeDir, '.var', 'app', 'com.valvesoftware.Steam', 'data', 'Steam', 'steamapps', 'common')
-        ];
-    } else if (process.platform === 'darwin') {
-        steamPaths = [
-            path.join(homeDir, 'Library', 'Application Support', 'Steam', 'steamapps', 'common')
-        ];
-    }
+    const sanitizedName = name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+    const installPath = path.join(homeDir, 'Documents', 'LegacyClient_' + sanitizedName);
 
-    for (const steamPath of steamPaths) {
-        if (fs.existsSync(steamPath)) {
-            try {
-                const dirs = fs.readdirSync(steamPath);
-                dirs.filter(d => d.startsWith('Proton') || d.includes('Wine') || d.includes('CrossOver')).forEach(d => {
-                    // Check for common Proton structure
-                    const protonPath = path.join(steamPath, d, 'proton');
-                    if (fs.existsSync(protonPath)) {
-                        layers.push({ name: d, cmd: protonPath });
-                    }
-                });
-            } catch (e) {}
-        }
-    }
+    const newInst = {
+        id: 'instance-' + Date.now(),
+        name: name,
+        repo: repo,
+        execPath: DEFAULT_EXEC,
+        ip: "",
+        port: "",
+        isServer: false,
+        compatLayer: 'direct',
+        installPath: installPath,
+        installedTag: null
+    };
 
-    select.innerHTML = '';
-    layers.forEach(l => {
-        const opt = document.createElement('option');
-        opt.value = l.cmd;
-        opt.textContent = l.name;
-        select.appendChild(opt);
-        if (l.cmd === savedValue) opt.selected = true;
-    });
-
-    updateCompatDisplay();
+    instances.push(newInst);
+    await saveInstancesToStore();
+    toggleAddInstance(false);
+    renderInstancesList();
+    showToast("Instance Created!");
 }
 
-function updateCompatDisplay() {
-    const select = document.getElementById('compat-select');
-    const display = document.getElementById('current-compat-display');
-    if (select && display && select.selectedIndex !== -1) {
-        display.textContent = select.options[select.selectedIndex].text;
+async function switchInstance(id) {
+    if (isProcessing || id === currentInstanceId) return;
+    
+    currentInstanceId = id;
+    currentInstance = instances.find(i => i.id === currentInstanceId);
+    await saveInstancesToStore();
+    
+    document.getElementById('repo-input').value = currentInstance.repo;
+    document.getElementById('exec-input').value = currentInstance.execPath;
+    document.getElementById('ip-input').value = currentInstance.ip;
+    document.getElementById('port-input').value = currentInstance.port;
+    document.getElementById('server-checkbox').checked = currentInstance.isServer;
+    document.getElementById('install-path-input').value = currentInstance.installPath;
+    
+    if (process.platform === 'linux' || process.platform === 'darwin') {
+        scanCompatibilityLayers();
+    }
+    
+    renderInstancesList();
+    showToast("Switched to " + currentInstance.name);
+    fetchGitHubData();
+    loadSplashText();
+    
+    if (window.loadMainMenuSkin) window.loadMainMenuSkin();
+}
+
+async function deleteInstance(id) {
+    if (id === currentInstanceId) return;
+    
+    if (confirm("Are you sure you want to delete this instance profile? (Files on disk will NOT be deleted)")) {
+        instances = instances.filter(i => i.id !== id);
+        await saveInstancesToStore();
+        renderInstancesList();
+        showToast("Instance Deleted");
     }
 }
 
 async function getInstallDir() {
-    const homeDir = require('os').homedir();
-    const defaultPath = path.join(homeDir, 'Documents', 'LegacyClient');
-    return await Store.get('legacy_install_path', defaultPath);
+    return currentInstance.installPath;
 }
 
 async function browseInstallDir() {
@@ -660,20 +625,17 @@ async function openGameDir() {
 }
 
 async function getInstalledPath() {
-    const installDir = await getInstallDir();
-    const execPath = await Store.get('legacy_exec_path', DEFAULT_EXEC);
-    return path.join(installDir, execPath);
+    return path.join(currentInstance.installPath, currentInstance.execPath);
 }
 
 async function checkIsInstalled(tag) {
     const fullPath = await getInstalledPath();
-    const installedTag = await Store.get('installed_version_tag');
-    return fs.existsSync(fullPath) && installedTag === tag;
+    return fs.existsSync(fullPath) && currentInstance.installedTag === tag;
 }
 
 async function updatePlayButtonText() {
     const btn = document.getElementById('btn-play-main');
-    if (isProcessing) return;
+    if (!btn || isProcessing) return;
 
     if (isGameRunning) {
         btn.textContent = "GAME RUNNING";
@@ -739,11 +701,11 @@ function closeWindow() {
 }
 
 async function fetchGitHubData() {
-    const repo = await Store.get('legacy_repo', DEFAULT_REPO);
+    const repo = currentInstance.repo;
     const loader = document.getElementById('loader');
     const loaderText = document.getElementById('loader-text');
-    loader.style.display = 'flex';
-    loaderText.textContent = "SYNCING: " + repo;
+    if (loader) loader.style.display = 'flex';
+    if (loaderText) loaderText.textContent = "SYNCING: " + repo;
 
     try {
         const [relRes, commRes] = await Promise.all([
@@ -760,15 +722,19 @@ async function fetchGitHubData() {
         populateUpdatesSidebar();
 
         setTimeout(() => {
-            loader.style.opacity = '0';
-            setTimeout(() => loader.style.display = 'none', 300);
+            if (loader) {
+                loader.style.opacity = '0';
+                setTimeout(() => loader.style.display = 'none', 300);
+            }
         }, 500);
     } catch (err) {
-        loaderText.textContent = "REPO NOT FOUND OR API ERROR";
+        if (loaderText) loaderText.textContent = "REPO NOT FOUND OR API ERROR";
         showToast("Check repository name in Options.");
         setTimeout(() => {
-            loader.style.opacity = '0';
-            setTimeout(() => loader.style.display = 'none', 300);
+            if (loader) {
+                loader.style.opacity = '0';
+                setTimeout(() => loader.style.display = 'none', 300);
+            }
         }, 2500);
     }
 }
@@ -776,10 +742,11 @@ async function fetchGitHubData() {
 function populateVersions() {
     const select = document.getElementById('version-select');
     const display = document.getElementById('current-version-display');
+    if (!select) return;
     select.innerHTML = '';
 
     if(releasesData.length === 0) {
-        display.textContent = "No Releases Found";
+        if (display) display.textContent = "No Releases Found";
         return;
     }
 
@@ -788,7 +755,7 @@ function populateVersions() {
         opt.value = index;
         opt.textContent = `Legacy (${rel.tag_name})`;
         select.appendChild(opt);
-        if(index === 0) display.textContent = opt.textContent;
+        if(index === 0 && display) display.textContent = opt.textContent;
     });
     currentReleaseIndex = 0;
     updatePlayButtonText();
@@ -796,6 +763,7 @@ function populateVersions() {
 
 function populateUpdatesSidebar() {
     const list = document.getElementById('updates-list');
+    if (!list) return;
     list.innerHTML = '';
 
     if (commitsData.length === 0) {
@@ -803,15 +771,12 @@ function populateUpdatesSidebar() {
         return;
     }
 
-    // Show the last 20 commits
     commitsData.slice(0, 20).forEach((c) => {
         const item = document.createElement('div');
         item.className = 'update-item patch-note-card commit-card';
-
         const date = new Date(c.commit.author.date).toLocaleString();
         const shortSha = c.sha.substring(0, 7);
         const message = c.commit.message;
-
         item.innerHTML = `
             <div class="pn-header">
                 <span class="update-date">${date}</span>
@@ -825,6 +790,7 @@ function populateUpdatesSidebar() {
 
 function updateSelectedRelease() {
     const select = document.getElementById('version-select');
+    if (!select) return;
     currentReleaseIndex = select.value;
     document.getElementById('current-version-display').textContent = select.options[select.selectedIndex].text;
     updatePlayButtonText();
@@ -832,16 +798,13 @@ function updateSelectedRelease() {
 
 async function launchGame() {
     if (isProcessing || isGameRunning) return;
-
     const release = releasesData[currentReleaseIndex];
     if (!release) return;
-
     const asset = release.assets.find(a => a.name === TARGET_FILE);
     if (!asset) {
         showToast("ZIP Asset missing in this version!");
         return;
     }
-
     const isInstalled = await checkIsInstalled(release.tag_name);
     if (isInstalled) {
         setProcessingState(true);
@@ -862,14 +825,12 @@ async function launchGame() {
                 await launchLocalClient();
                 setProcessingState(false);
             }
-            // if 'cancel', do nothing
         } else {
             setProcessingState(true);
             await handleElectronFlow(asset.browser_download_url);
             setProcessingState(false);
         }
     }
-
     updatePlayButtonText();
 }
 
@@ -880,11 +841,9 @@ async function promptUpdate(newTag) {
         const skipBtn = document.getElementById('btn-skip-update');
         const closeBtn = document.getElementById('btn-close-update');
         const modalText = document.getElementById('update-modal-text');
-
         document.activeElement?.blur();
         modal.style.display = 'flex';
         modal.style.opacity = '1';
-
         const cleanup = (result) => {
             modal.style.opacity = '0';
             setTimeout(() => {
@@ -896,103 +855,70 @@ async function promptUpdate(newTag) {
             closeBtn.onclick = null;
             resolve(result);
         };
-
         confirmBtn.onclick = () => cleanup('update');
         skipBtn.onclick = () => cleanup('launch');
         closeBtn.onclick = () => cleanup('cancel');
     });
 }
 
-// Manual trigger for checking updates via UI button
 async function checkForUpdatesManual() {
-    // If we have releases data loaded, allow reinstall/update flow regardless of current tag
     const rel = releasesData[currentReleaseIndex];
     if (!rel) {
         showToast("No releases loaded yet");
         return;
     }
-
     const asset = rel.assets.find(a => a.name === TARGET_FILE);
     if (!asset) {
         showToast("ZIP Asset missing in this version!");
         return;
     }
-
-    const installedTag = await Store.get('installed_version_tag', 'Unknown');
-    // Prompt user to update/install; Update path will reinstall (delete existing LegacyClient)
     const choice = await promptUpdate(rel.tag_name);
     if (choice === 'update') {
-        // Re-download and install (and launch, as install flow does)
-        // handleElectronFlow now manages clean installation while preserving user data
         setProcessingState(true);
         await handleElectronFlow(asset.browser_download_url);
         setProcessingState(false);
     } else if (choice === 'launch') {
-        // User chose to launch existing/older version
         setProcessingState(true);
         updateProgress(100, "Launching Existing...");
         await launchLocalClient();
         setProcessingState(false);
     }
-    // if 'cancel', do nothing
     updatePlayButtonText();
 }
 
 async function launchLocalClient() {
     const fullPath = await getInstalledPath();
-    
-    if (!fs.existsSync(fullPath)) {
-        throw new Error("Executable not found! Try reinstalling.");
-    }
-
-    // Ensure the file is executable on Linux/macOS
+    if (!fs.existsSync(fullPath)) throw new Error("Executable not found! Try reinstalling.");
     if (process.platform !== 'win32') {
-        try {
-            fs.chmodSync(fullPath, 0o755);
-        } catch (e) {
-            console.warn("Failed to set executable permissions:", e);
-        }
+        try { fs.chmodSync(fullPath, 0o755); } catch (e) { console.warn("Failed to set executable permissions:", e); }
     }
-
     return new Promise(async (resolve, reject) => {
-        const compat = await Store.get('legacy_compat_layer', 'direct');
+        const compat = currentInstance.compatLayer;
         const username = await Store.get('legacy_username', "");
-        const ip = await Store.get('legacy_ip', "");
-        const port = await Store.get('legacy_port', "");
-        const isServer = await Store.get('legacy_is_server', false);
-
+        const ip = currentInstance.ip;
+        const port = currentInstance.port;
+        const isServer = currentInstance.isServer;
         let args = [];
         if (username) args.push("-name", username);
         if (isServer) args.push("-server");
         if (ip) args.push("-ip", ip);
         if (port) args.push("-port", port);
-
         const argString = args.map(a => `"${a}"`).join(" ");
         let cmd = `"${fullPath}" ${argString}`;
-        
         if (process.platform === 'linux' || process.platform === 'darwin') {
-            if (compat === 'wine64' || compat === 'wine') {
-                cmd = `${compat} "${fullPath}" ${argString}`;
-            } else if (compat.includes('Proton')) {
+            if (compat === 'wine64' || compat === 'wine') cmd = `${compat} "${fullPath}" ${argString}`;
+            else if (compat.includes('Proton')) {
                 const prefix = path.join(path.dirname(fullPath), 'pfx');
                 if (!fs.existsSync(prefix)) fs.mkdirSync(prefix, { recursive: true });
-                
                 cmd = `STEAM_COMPAT_CLIENT_INSTALL_PATH="" STEAM_COMPAT_DATA_PATH="${prefix}" "${compat}" run "${fullPath}" ${argString}`;
             }
         }
-
-        console.log("Launching command:", cmd);
         const startTime = Date.now();
         const proc = childProcess.exec(cmd, (error) => {
             const duration = Date.now() - startTime;
-            if (error && duration < 2000) {
-                showToast("Failed to launch: " + error.message);
-                reject(error);
-            } else {
-                resolve();
-            }
+            if (error && duration < 2000) { showToast("Failed to launch: " + error.message); reject(error); }
+            else resolve();
         });
-        
         monitorProcess(proc);
     });
 }
@@ -1002,79 +928,49 @@ function setProcessingState(active) {
     const playBtn = document.getElementById('btn-play-main');
     const optionsBtn = document.getElementById('btn-options');
     const progressContainer = document.getElementById('progress-container');
-
     if (active) {
-        playBtn.classList.add('disabled');
-        optionsBtn.classList.add('disabled');
-        progressContainer.style.display = 'flex';
+        if (playBtn) playBtn.classList.add('disabled');
+        if (optionsBtn) optionsBtn.classList.add('disabled');
+        if (progressContainer) progressContainer.style.display = 'flex';
         updateProgress(0, "Preparing...");
     } else {
-        playBtn.classList.remove('disabled');
-        optionsBtn.classList.remove('disabled');
-        progressContainer.style.display = 'none';
+        if (playBtn) playBtn.classList.remove('disabled');
+        if (optionsBtn) optionsBtn.classList.remove('disabled');
+        if (progressContainer) progressContainer.style.display = 'none';
     }
 }
 
 function updateProgress(percent, text) {
-    document.getElementById('progress-bar-fill').style.width = percent + "%";
-    if (text) document.getElementById('progress-text').textContent = text;
+    const bar = document.getElementById('progress-bar-fill');
+    if (bar) bar.style.width = percent + "%";
+    const txt = document.getElementById('progress-text');
+    if (text && txt) txt.textContent = text;
 }
 
 async function handleElectronFlow(url) {
     try {
-        const homeDir = require('os').homedir();
-        const extractDir = await getInstallDir();
+        const extractDir = currentInstance.installPath;
         const parentDir = path.dirname(extractDir);
         const zipPath = path.join(parentDir, TARGET_FILE);
         const backupDir = path.join(parentDir, 'LegacyClient_Backup');
-
         updateProgress(5, "Downloading " + TARGET_FILE + "...");
         await downloadFile(url, zipPath);
-
         updateProgress(75, "Extracting Archive...");
-
-        // Files to preserve when updating
-        const preserveList = [
-            'options.txt',
-            'servers.txt',
-            'username.txt',
-            'settings.dat',
-            'UID.dat',
-            path.join('Windows64', 'GameHDD')
-        ];
-
+        const preserveList = ['options.txt', 'servers.txt', 'username.txt', 'settings.dat', 'UID.dat', path.join('Windows64', 'GameHDD'), path.join('Common', 'res', 'mob', 'char.png')];
         if (fs.existsSync(extractDir)) {
-            // Backup preserved files
             if (fs.existsSync(backupDir)) fs.rmSync(backupDir, { recursive: true, force: true });
             fs.mkdirSync(backupDir, { recursive: true });
-            
             for (const item of preserveList) {
                 const src = path.join(extractDir, item);
                 const dest = path.join(backupDir, item);
-                if (fs.existsSync(src)) {
-                    fs.mkdirSync(path.dirname(dest), { recursive: true });
-                    fs.renameSync(src, dest);
-                }
+                if (fs.existsSync(src)) { fs.mkdirSync(path.dirname(dest), { recursive: true }); fs.renameSync(src, dest); }
             }
-            // Clean install: remove old client files
-            try {
-                fs.rmSync(extractDir, { recursive: true, force: true });
-            } catch (e) {
-                console.warn("Cleanup error:", e);
-            }
+            try { fs.rmSync(extractDir, { recursive: true, force: true }); } catch (e) { console.warn("Cleanup error:", e); }
         }
-
-        if (!fs.existsSync(extractDir)) {
-            fs.mkdirSync(extractDir, { recursive: true });
-        }
-        
+        if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
         await extractZip(zipPath, { dir: extractDir });
-
-        // Refresh music playlist if it was empty
         await MusicManager.scan();
         if (MusicManager.enabled) MusicManager.start();
-
-        // Restore preserved files
         if (fs.existsSync(backupDir)) {
             for (const item of preserveList) {
                 const src = path.join(backupDir, item);
@@ -1087,200 +983,98 @@ async function handleElectronFlow(url) {
             }
             fs.rmSync(backupDir, { recursive: true, force: true });
         }
-
-        const execName = await Store.get('legacy_exec_path', DEFAULT_EXEC);
-        const fullPath = path.join(extractDir, execName);
-
-        if (!fs.existsSync(fullPath)) {
-            showToast("Executable not found at: " + execName);
-            return;
-        }
-
+        const fullPath = await getInstalledPath();
+        if (!fs.existsSync(fullPath)) { showToast("Executable not found at: " + currentInstance.execPath); return; }
         updateProgress(100, "Launching...");
-        
-        await Store.set('installed_version_tag', releasesData[currentReleaseIndex].tag_name);
-        
+        currentInstance.installedTag = releasesData[currentReleaseIndex].tag_name;
+        await saveInstancesToStore();
         await new Promise(r => setTimeout(r, 800));
         await launchLocalClient();
-
-    } catch (e) {
-        showToast("Error: " + e.message);
-    }
+    } catch (e) { showToast("Error: " + e.message); }
 }
 
 function downloadFile(url, destPath) {
     return new Promise((resolve, reject) => {
         const dir = path.dirname(destPath);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-        }
-
-        // Always re-download by removing any existing file first
-        if (fs.existsSync(destPath)) {
-            try { fs.unlinkSync(destPath); } catch (e) { /* ignore */ }
-        }
-
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        if (fs.existsSync(destPath)) try { fs.unlinkSync(destPath); } catch (e) {}
         const file = fs.createWriteStream(destPath);
-        let totalSize = 0;
-        let downloadedSize = 0;
-
+        let totalSize = 0; let downloadedSize = 0;
         https.get(url, (response) => {
-            if (response.statusCode === 302 || response.statusCode === 301) {
-                downloadFile(response.headers.location, destPath).then(resolve).catch(reject);
-                return;
-            }
-
+            if (response.statusCode === 302 || response.statusCode === 301) { downloadFile(response.headers.location, destPath).then(resolve).catch(reject); return; }
             totalSize = parseInt(response.headers['content-length'], 10);
-
             response.on('data', (chunk) => {
                 downloadedSize += chunk.length;
                 const percent = Math.floor((downloadedSize / totalSize) * 70) + 5;
                 updateProgress(percent, `Downloading... ${percent}%`);
             });
-
             response.pipe(file);
-
-            file.on('finish', () => {
-                file.close(() => resolve());
-            });
-
-            file.on('error', (err) => {
-                fs.unlink(destPath, () => {});
-                reject(err);
-            });
-        }).on('error', (err) => {
-            fs.unlink(destPath, () => {});
-            reject(err);
-        });
+            file.on('finish', () => file.close(() => resolve()));
+            file.on('error', (err) => { fs.unlink(destPath, () => {}); reject(err); });
+        }).on('error', (err) => { fs.unlink(destPath, () => {}); reject(err); });
     });
 }
 
 function toggleOptions(show) {
     if (isProcessing) return;
     const modal = document.getElementById('options-modal');
-    if (show) {
-        document.activeElement?.blur();
-        modal.style.display = 'flex';
-        modal.style.opacity = '1';
-    } else {
-        modal.style.opacity = '0';
-        setTimeout(() => modal.style.display = 'none', 300);
-    }
+    if (show) { document.activeElement?.blur(); modal.style.display = 'flex'; modal.style.opacity = '1'; }
+    else { modal.style.opacity = '0'; setTimeout(() => modal.style.display = 'none', 300); }
 }
 
 async function toggleProfile(show) {
     if (isProcessing) return;
     const modal = document.getElementById('profile-modal');
-    if (show) {
-        await updatePlaytimeDisplay();
-        document.activeElement?.blur();
-        modal.style.display = 'flex';
-        modal.style.opacity = '1';
-    } else {
-        modal.style.opacity = '0';
-        setTimeout(() => modal.style.display = 'none', 300);
-    }
+    if (show) { await updatePlaytimeDisplay(); document.activeElement?.blur(); modal.style.display = 'flex'; modal.style.opacity = '1'; }
+    else { modal.style.opacity = '0'; setTimeout(() => modal.style.display = 'none', 300); }
 }
 
 async function toggleServers(show) {
     if (isProcessing) return;
     const modal = document.getElementById('servers-modal');
-    if (show) {
-        await loadServers();
-        document.activeElement?.blur();
-        modal.style.display = 'flex';
-        modal.style.opacity = '1';
-    } else {
-        modal.style.opacity = '0';
-        setTimeout(() => modal.style.display = 'none', 300);
-    }
+    if (show) { await loadServers(); document.activeElement?.blur(); modal.style.display = 'flex'; modal.style.opacity = '1'; }
+    else { modal.style.opacity = '0'; setTimeout(() => modal.style.display = 'none', 300); }
 }
 
-async function getServersFilePath() {
-    const fullPath = await getInstalledPath();
-    return path.join(path.dirname(fullPath), 'servers.txt');
-}
+async function getServersFilePath() { return path.join(currentInstance.installPath, 'servers.txt'); }
 
 async function loadServers() {
     const filePath = await getServersFilePath();
     const container = document.getElementById('servers-list-container');
+    if (!container) return;
     container.innerHTML = '';
-
-    if (!fs.existsSync(filePath)) {
-        container.innerHTML = '<div class="text-center text-gray-400 py-4">No servers added yet.</div>';
-        return;
-    }
-
+    if (!fs.existsSync(filePath)) { container.innerHTML = '<div class="text-center text-gray-400 py-4">No servers added yet.</div>'; return; }
     try {
         const content = fs.readFileSync(filePath, 'utf-8');
         const lines = content.split('\n').map(l => l.trim()).filter(l => l !== '');
         const servers = [];
-
-        for (let i = 0; i < lines.length; i += 3) {
-            if (lines[i] && lines[i+1] && lines[i+2]) {
-                servers.push({
-                    ip: lines[i],
-                    port: lines[i+1],
-                    name: lines[i+2]
-                });
-            }
-        }
-
-        if (servers.length === 0) {
-            container.innerHTML = '<div class="text-center text-gray-400 py-4">No servers added yet.</div>';
-            return;
-        }
-
+        for (let i = 0; i < lines.length; i += 3) { if (lines[i] && lines[i+1] && lines[i+2]) servers.push({ ip: lines[i], port: lines[i+1], name: lines[i+2] }); }
+        if (servers.length === 0) { container.innerHTML = '<div class="text-center text-gray-400 py-4">No servers added yet.</div>'; return; }
         servers.forEach((s, index) => {
             const item = document.createElement('div');
             item.className = 'flex justify-between items-center p-3 border-b border-[#333] hover:bg-[#111]';
-            item.innerHTML = `
-                <div class="flex flex-col">
-                    <span class="text-white text-xl">${s.name}</span>
-                    <span class="text-gray-400 text-sm">${s.ip}:${s.port}</span>
-                </div>
-                <div class="btn-mc !w-[100px] !h-[40px] !text-lg !mb-0" onclick="removeServer(${index})">DELETE</div>
-            `;
+            item.innerHTML = `<div class="flex flex-col"><span class="text-white text-xl">${s.name}</span><span class="text-gray-400 text-sm">${s.ip}:${s.port}</span></div><div class="btn-mc !w-[100px] !h-[40px] !text-lg !mb-0" onclick="removeServer(${index})">DELETE</div>`;
             container.appendChild(item);
         });
-    } catch (e) {
-        console.error("Failed to load servers:", e);
-        container.innerHTML = '<div class="text-center text-red-400 py-4">Error loading servers.</div>';
-    }
+    } catch (e) { console.error("Failed to load servers:", e); container.innerHTML = '<div class="text-center text-red-400 py-4">Error loading servers.</div>'; }
 }
 
 async function addServer() {
     const nameInput = document.getElementById('server-name-input');
     const ipInput = document.getElementById('server-ip-input');
     const portInput = document.getElementById('server-port-input');
-
     const name = nameInput.value.trim();
     const ip = ipInput.value.trim();
     const port = portInput.value.trim() || "25565";
-
-    if (!name || !ip) {
-        showToast("Name and IP are required!");
-        return;
-    }
-
+    if (!name || !ip) { showToast("Name and IP are required!"); return; }
     const filePath = await getServersFilePath();
     const serverEntry = `${ip}\n${port}\n${name}\n`;
-
     try {
-        const dir = path.dirname(filePath);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        
+        const dir = path.dirname(filePath); if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
         fs.appendFileSync(filePath, serverEntry);
-        
-        nameInput.value = '';
-        ipInput.value = '';
-        portInput.value = '';
-        
-        showToast("Server Added!");
-        loadServers();
-    } catch (e) {
-        showToast("Failed to save server: " + e.message);
-    }
+        nameInput.value = ''; ipInput.value = ''; portInput.value = '';
+        showToast("Server Added!"); loadServers();
+    } catch (e) { showToast("Failed to save server: " + e.message); }
 }
 
 async function removeServer(index) {
@@ -1289,30 +1083,11 @@ async function removeServer(index) {
         const content = fs.readFileSync(filePath, 'utf-8');
         const lines = content.split('\n').map(l => l.trim()).filter(l => l !== '');
         const servers = [];
-
-        for (let i = 0; i < lines.length; i += 3) {
-            if (lines[i] && lines[i+1] && lines[i+2]) {
-                servers.push({
-                    ip: lines[i],
-                    port: lines[i+1],
-                    name: lines[i+2]
-                });
-            }
-        }
-
+        for (let i = 0; i < lines.length; i += 3) { if (lines[i] && lines[i+1] && lines[i+2]) servers.push({ ip: lines[i], port: lines[i+1], name: lines[i+2] }); }
         servers.splice(index, 1);
-
-        let newContent = "";
-        servers.forEach(s => {
-            newContent += `${s.ip}\n${s.port}\n${s.name}\n`;
-        });
-
-        fs.writeFileSync(filePath, newContent);
-        loadServers();
-        showToast("Server Removed");
-    } catch (e) {
-        showToast("Failed to remove server: " + e.message);
-    }
+        let newContent = ""; servers.forEach(s => { newContent += `${s.ip}\n${s.port}\n${s.name}\n`; });
+        fs.writeFileSync(filePath, newContent); loadServers(); showToast("Server Removed");
+    } catch (e) { showToast("Failed to remove server: " + e.message); }
 }
 
 async function updatePlaytimeDisplay() {
@@ -1322,9 +1097,7 @@ async function updatePlaytimeDisplay() {
 }
 
 function formatPlaytime(seconds) {
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = seconds % 60;
+    const h = Math.floor(seconds / 3600); const m = Math.floor((seconds % 3600) / 60); const s = seconds % 60;
     return `${h}h ${m}m ${s}s`;
 }
 
@@ -1336,88 +1109,152 @@ async function saveOptions() {
     const port = document.getElementById('port-input').value.trim();
     const isServer = document.getElementById('server-checkbox').checked;
     const newInstallPath = document.getElementById('install-path-input').value.trim();
-
-    const oldInstallPath = await getInstallDir();
+    const oldInstallPath = currentInstance.installPath;
     if (newInstallPath && newInstallPath !== oldInstallPath) {
-        // Move preserved files to new directory if they exist in old but not in new
         if (fs.existsSync(oldInstallPath)) {
-            const preserveList = [
-                'options.txt',
-                'servers.txt',
-                'username.txt',
-                'settings.dat',
-                'UID.dat',
-                path.join('Windows64', 'GameHDD')
-            ];
-
-            if (!fs.existsSync(newInstallPath)) {
-                fs.mkdirSync(newInstallPath, { recursive: true });
-            }
-
+            const preserveList = ['options.txt', 'servers.txt', 'username.txt', 'settings.dat', 'UID.dat', path.join('Windows64', 'GameHDD'), path.join('Common', 'res', 'mob', 'char.png')];
+            if (!fs.existsSync(newInstallPath)) fs.mkdirSync(newInstallPath, { recursive: true });
             for (const item of preserveList) {
-                const src = path.join(oldInstallPath, item);
-                const dest = path.join(newInstallPath, item);
-                
-                if (fs.existsSync(src)) {
-                    const destDir = path.dirname(dest);
-                    if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
-                    
-                    // Simple move; if cross-device it might fail, but let's try
-                    try {
-                        if (!fs.existsSync(dest)) {
-                            fs.renameSync(src, dest);
-                        } else {
-                            console.log("Dest already exists, skipping move for: " + item);
-                        }
-                    } catch (e) {
-                        console.error("Migration error for " + item + ": " + e.message);
-                    }
-                }
+                const src = path.join(oldInstallPath, item); const dest = path.join(newInstallPath, item);
+                if (fs.existsSync(src)) { const destDir = path.dirname(dest); if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true }); try { if (!fs.existsSync(dest)) fs.renameSync(src, dest); } catch (e) { console.error("Migration error for " + item + ": " + e.message); } }
             }
         }
-        await Store.set('legacy_install_path', newInstallPath);
+        currentInstance.installPath = newInstallPath;
     }
-
-    if (newRepo) await Store.set('legacy_repo', newRepo);
-    if (newExec) await Store.set('legacy_exec_path', newExec);
-    await Store.set('legacy_ip', ip);
-    await Store.set('legacy_port', port);
-    await Store.set('legacy_is_server', isServer);
-    
-    if (compatSelect) {
-        await Store.set('legacy_compat_layer', compatSelect.value);
-    }
-
-    toggleOptions(false);
-    fetchGitHubData();
-    updatePlayButtonText();
-    showToast("Settings Saved");
+    if (newRepo) currentInstance.repo = newRepo;
+    if (newExec) currentInstance.execPath = newExec;
+    currentInstance.ip = ip; currentInstance.port = port; currentInstance.isServer = isServer;
+    if (compatSelect) currentInstance.compatLayer = compatSelect.value;
+    await saveInstancesToStore(); toggleOptions(false); fetchGitHubData(); updatePlayButtonText(); showToast("Settings Saved");
 }
 
 async function saveProfile() {
-    const username = document.getElementById('username-input').value.trim();
+    let username = document.getElementById('username-input').value.trim();
+    if (username.length > 16) {
+        username = username.substring(0, 16);
+    }
     await Store.set('legacy_username', username);
-    toggleProfile(false);
-    showToast("Profile Updated");
+    toggleProfile(false); showToast("Profile Updated");
 }
 
 function showToast(msg) {
-    const t = document.getElementById('toast');
-    t.textContent = msg;
-    t.style.display = 'block';
-    t.style.animation = 'none';
-    t.offsetHeight; 
-    t.style.animation = 'slideUp 0.3s ease-out';
-    setTimeout(() => { 
-        t.style.display = 'none';
-    }, 3000);
+    const t = document.getElementById('toast'); if (!t) return;
+    t.textContent = msg; t.style.display = 'block'; t.style.animation = 'none'; t.offsetHeight; t.style.animation = 'slideUp 0.3s ease-out';
+    setTimeout(() => { t.style.display = 'none'; }, 3000);
 }
 
-async function toggleMusic() {
-    await MusicManager.toggle();
+async function toggleMusic() { await MusicManager.toggle(); }
+
+function scanCompatibilityLayers() {
+    const select = document.getElementById('compat-select'); if (!select) return;
+    const savedValue = currentInstance.compatLayer;
+    const layers = [{ name: 'Default (Direct)', cmd: 'direct' }, { name: 'Wine64', cmd: 'wine64' }, { name: 'Wine', cmd: 'wine' }];
+    const homeDir = require('os').homedir(); let steamPaths = [];
+    if (process.platform === 'linux') steamPaths = [path.join(homeDir, '.steam', 'steam', 'steamapps', 'common'), path.join(homeDir, '.local', 'share', 'Steam', 'steamapps', 'common'), path.join(homeDir, '.var', 'app', 'com.valvesoftware.Steam', 'data', 'Steam', 'steamapps', 'common')];
+    else if (process.platform === 'darwin') steamPaths = [path.join(homeDir, 'Library', 'Application Support', 'Steam', 'steamapps', 'common')];
+    for (const steamPath of steamPaths) {
+        if (fs.existsSync(steamPath)) { try { const dirs = fs.readdirSync(steamPath); dirs.filter(d => d.startsWith('Proton') || d.includes('Wine') || d.includes('CrossOver')).forEach(d => { const protonPath = path.join(steamPath, d, 'proton'); if (fs.existsSync(protonPath)) layers.push({ name: d, cmd: protonPath }); }); } catch (e) {} }
+    }
+    select.innerHTML = '';
+    layers.forEach(l => { const opt = document.createElement('option'); opt.value = l.cmd; opt.textContent = l.name; select.appendChild(opt); if (l.cmd === savedValue) opt.selected = true; });
+    updateCompatDisplay();
+}
+
+function updateCompatDisplay() {
+    const select = document.getElementById('compat-select'); const display = document.getElementById('current-compat-display');
+    if (select && display && select.selectedIndex !== -1) display.textContent = select.options[select.selectedIndex].text;
+}
+
+function toggleSidebar() {
+    const sidebar = document.querySelector('.sidebar'); const toggleIcon = document.getElementById('sidebar-toggle-icon');
+    sidebar.classList.toggle('collapsed');
+    if (sidebar.classList.contains('collapsed')) { toggleIcon.textContent = '▶'; toggleIcon.title = 'Expand Patch Notes'; }
+    else { toggleIcon.textContent = '◀'; toggleIcon.title = 'Collapse Patch Notes'; }
+}
+
+function isNewerVersion(latest, current) {
+    const lParts = latest.split('.').map(Number); const cParts = current.split('.').map(Number);
+    for (let i = 0; i < Math.max(lParts.length, cParts.length); i++) {
+        const l = lParts[i] || 0; const c = cParts[i] || 0;
+        if (l > c) return true; if (l < c) return false;
+    }
+    return false;
+}
+
+async function checkForLauncherUpdates(manual = false) {
+    try {
+        const currentVersion = require('./package.json').version;
+        const res = await fetch(`https://api.github.com/repos/${LAUNCHER_REPO}/releases/latest`);
+        if (!res.ok) { if (manual) showToast("Could not check for updates."); return; }
+        const latestRelease = await res.json(); const latestVersion = latestRelease.tag_name.replace('v', '');
+        if (isNewerVersion(latestVersion, currentVersion)) {
+            const updateConfirmed = await promptLauncherUpdate(latestRelease.tag_name, latestRelease.body);
+            if (updateConfirmed) downloadAndInstallLauncherUpdate(latestRelease);
+        } else if (manual) showToast("Launcher is up to date!");
+    } catch (e) { console.error("Launcher update check failed:", e); if (manual) showToast("Update check failed."); }
+}
+
+async function promptLauncherUpdate(version, changelog) {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('update-modal');
+        const confirmBtn = document.getElementById('btn-confirm-update');
+        const skipBtn = document.getElementById('btn-skip-update');
+        const closeBtn = document.getElementById('btn-close-update');
+        const modalText = document.getElementById('update-modal-text');
+        if (modalText) {
+            modalText.innerHTML = `<span class="update-tag">NEW UPDATE: v${version}</span><br><div class="pn-body" style="font-size: 16px; max-height: 200px; overflow-y: auto; background: rgba(0,0,0,0.2); padding: 10px; margin-top: 5px;">${changelog || "No changelog provided."}</div>`;
+            modalText.style.display = 'block';
+        }
+        document.activeElement?.blur(); modal.style.display = 'flex'; modal.style.opacity = '1';
+        const cleanup = (result) => {
+            modal.style.opacity = '0'; setTimeout(() => { modal.style.display = 'none'; if (modalText) modalText.style.display = 'none'; }, 300);
+            confirmBtn.onclick = null; skipBtn.onclick = null; closeBtn.onclick = null; resolve(result);
+        };
+        confirmBtn.onclick = () => cleanup(true); skipBtn.onclick = () => cleanup(false); closeBtn.onclick = () => cleanup(false);
+    });
+}
+
+async function downloadAndInstallLauncherUpdate(release) {
+    setProcessingState(true); updateProgress(0, "Preparing Launcher Update...");
+    let assetPattern = "";
+    if (process.platform === 'win32') assetPattern = ".exe";
+    else if (process.platform === 'linux') assetPattern = ".appimage";
+    else if (process.platform === 'darwin') assetPattern = ".dmg";
+    const asset = release.assets.find(a => a.name.toLowerCase().endsWith(assetPattern));
+    if (!asset) { showToast("No compatible update found for your OS."); setProcessingState(false); return; }
+    try {
+        const homeDir = require('os').homedir(); const downloadPath = path.join(homeDir, 'Downloads', asset.name);
+        updateProgress(10, `Downloading Launcher Update...`); await downloadFile(asset.browser_download_url, downloadPath);
+        updateProgress(100, "Download Complete. Launching Installer...");
+        await new Promise(r => setTimeout(r, 1000));
+        if (process.platform === 'win32') childProcess.exec(`start "" "${downloadPath}"`);
+        else if (process.platform === 'linux') { fs.chmodSync(downloadPath, 0o755); childProcess.exec(`"${downloadPath}"`); }
+        else if (process.platform === 'darwin') childProcess.exec(`open "${downloadPath}"`);
+        setTimeout(() => ipcRenderer.send('window-close'), 2000);
+    } catch (e) { showToast("Launcher Update Error: " + e.message); setProcessingState(false); }
+}
+
+async function loadSplashText() {
+    const splashEl = document.getElementById('splash-text');
+    if (!splashEl) return;
+    try {
+        const filePath = path.join(__dirname, 'strings.txt');
+        if (fs.existsSync(filePath)) {
+            const content = fs.readFileSync(filePath, 'utf-8');
+            const lines = content.split('\n').map(l => l.trim()).filter(l => l !== '');
+            if (lines.length > 0) {
+                const randomSplash = lines[Math.floor(Math.random() * lines.length)];
+                splashEl.textContent = randomSplash;
+            }
+        }
+    } catch (e) {
+        console.error("Failed to load splash text:", e);
+        splashEl.textContent = "Welcome!";
+    }
 }
 
 // Global functions for HTML onclick
+window.toggleSidebar = toggleSidebar;
 window.minimizeWindow = minimizeWindow;
 window.toggleMaximize = toggleMaximize;
 window.closeWindow = closeWindow;
@@ -1435,3 +1272,11 @@ window.checkForUpdatesManual = checkForUpdatesManual;
 window.browseInstallDir = browseInstallDir;
 window.openGameDir = openGameDir;
 window.toggleMusic = toggleMusic;
+window.getInstallDir = getInstallDir;
+window.showToast = showToast;
+window.toggleInstances = toggleInstances;
+window.createNewInstance = createNewInstance;
+window.saveNewInstance = saveNewInstance;
+window.switchInstance = switchInstance;
+window.deleteInstance = deleteInstance;
+window.toggleAddInstance = toggleAddInstance;

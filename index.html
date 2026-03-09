@@ -26,6 +26,10 @@
         </div>
     </div>
 
+    <div id="offline-indicator" style="display: none; position: fixed; top: 40px; left: 50%; transform: translateX(-50%); background: #c42b1c; color: #fff; padding: 5px 20px; border: 2px solid #000; z-index: 100; font-weight: bold; font-size: 14px; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">
+        OFFLINE MODE — UPDATES DISABLED
+    </div>
+
     <div class="main-wrapper">
         <div class="sidebar collapsed" id="main-sidebar">
             <div class="sidebar-title" onclick="toggleSidebar()">
@@ -78,7 +82,7 @@
                     CHANGE SKIN
                 </div>
             </div>
-    
+            
             <div class="progress-container" id="progress-container">
                 <div class="progress-text" id="progress-text">Downloading...</div>
                 <div class="progress-bar-bg">
@@ -157,6 +161,22 @@
         </div>
     </div>
 
+    <div class="modal-overlay" id="snapshots-modal">
+        <div class="modal-box" style="max-width: 800px;">
+            <div class="modal-title">SNAPSHOTS / ROLLBACK</div>
+            <div id="snapshot-instance-name" style="color: #aaa; text-align: center; margin-top: -15px; margin-bottom: 20px; text-transform: uppercase;">Instance Name</div>
+
+            <div id="snapshots-list-container" class="w-full max-h-[350px] overflow-y-auto mb-6 border-2 border-[#555] bg-black p-2">
+                <div class="text-center text-gray-400 py-4">No snapshots found.</div>
+            </div>
+
+            <div class="flex gap-4 w-full">
+                <div class="btn-mc flex-grow nav-item" onclick="createSnapshotManual()" tabindex="0">NEW SNAPSHOT</div>
+                <div class="btn-mc flex-grow nav-item" onclick="toggleSnapshots(false)" tabindex="0">DONE</div>
+            </div>
+        </div>
+    </div>
+
     <div class="modal-overlay" id="options-modal">
         <div class="modal-box">
             <div class="modal-title">LAUNCHER OPTIONS</div>
@@ -189,6 +209,16 @@
                         <option value="direct">Default (Direct)</option>
                     </select>
                 </div>
+            </div>
+
+            <div class="mc-input-group" id="custom-proton-group" style="display: none;">
+                <label class="mc-label">Custom Proton Path:</label>
+                <input type="text" id="custom-proton-path" class="mc-input nav-item" placeholder="/path/to/proton" tabindex="0">
+            </div>
+
+            <div class="mc-input-group">
+                <label class="mc-label">Launcher Music Volume:</label>
+                <input type="range" id="volume-slider" min="0" max="1" step="0.05" value="1" class="nav-item w-full" tabindex="0">
             </div>
 
             <div class="grid grid-cols-2 gap-4 w-full mt-2">

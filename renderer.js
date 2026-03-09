@@ -20,6 +20,8 @@ let currentReleaseIndex = 0;
 let isProcessing = false;
 let isGameRunning = false;
 
+let snapshotInstanceId = null;
+
 const Store = {
     async get(key, defaultValue) {
         const val = await ipcRenderer.invoke('store-get', key);
@@ -33,7 +35,6 @@ const Store = {
     }
 };
 
-// Gamepad Controller Support
 const GamepadManager = {
     active: false,
     lastInputTime: 0,
@@ -138,7 +139,7 @@ const GamepadManager = {
     },
 
     getVisibleNavItems() {
-        const modals = ['update-modal', 'options-modal', 'profile-modal', 'servers-modal', 'instances-modal', 'add-instance-modal', 'skin-modal'];
+        const modals = ['update-modal', 'options-modal', 'profile-modal', 'servers-modal', 'instances-modal', 'add-instance-modal', 'skin-modal', 'snapshots-modal'];
         let activeModal = null;
         for (const id of modals) {
             const m = document.getElementById(id);
@@ -237,11 +238,12 @@ const GamepadManager = {
             else if (activeModal.id === 'add-instance-modal') toggleAddInstance(false);
             else if (activeModal.id === 'update-modal') document.getElementById('btn-skip-update')?.click();
             else if (activeModal.id === 'skin-modal') closeSkinManager();
+            else if (activeModal.id === 'snapshots-modal') toggleSnapshots(false);
         }
     },
 
     getActiveModal() {
-        const modals = ['update-modal', 'options-modal', 'profile-modal', 'servers-modal', 'instances-modal', 'add-instance-modal', 'skin-modal'];
+        const modals = ['update-modal', 'options-modal', 'profile-modal', 'servers-modal', 'instances-modal', 'add-instance-modal', 'skin-modal', 'snapshots-modal'];
         for (const id of modals) {
             const m = document.getElementById(id);
             if (m && m.style.display === 'flex') return m;
@@ -284,10 +286,13 @@ const GamepadManager = {
     scrollActive(val) {
         const serverList = document.getElementById('servers-list-container');
         const instanceList = document.getElementById('instances-list-container');
+        const snapshotList = document.getElementById('snapshots-list-container');
         if (this.getActiveModal()?.id === 'servers-modal' && serverList) {
             serverList.scrollTop += val;
         } else if (this.getActiveModal()?.id === 'instances-modal' && instanceList) {
             instanceList.scrollTop += val;
+        } else if (this.getActiveModal()?.id === 'snapshots-modal' && snapshotList) {
+            snapshotList.scrollTop += val;
         } else if (!this.getActiveModal()) {
             const sidebar = document.getElementById('updates-list')?.parentElement;
             if (sidebar) sidebar.scrollTop += val;
@@ -295,7 +300,6 @@ const GamepadManager = {
     }
 };
 
-// Music Player logic
 const MusicManager = {
     audio: new Audio(),
     playlist: [],
@@ -304,11 +308,20 @@ const MusicManager = {
 
     async init() {
         this.enabled = await Store.get('legacy_music_enabled', true);
+        this.audio.volume = await Store.get('legacy_music_volume', 0.5);
         this.updateIcon();
-        this.audio.volume = 1.0;
         this.audio.onended = () => this.playNext();
         if (this.enabled) {
             this.start();
+        }
+        
+        const slider = document.getElementById('volume-slider');
+        if (slider) {
+            slider.value = this.audio.volume;
+            slider.oninput = async () => {
+                this.audio.volume = slider.value;
+                await Store.set('legacy_music_volume', this.audio.volume);
+            };
         }
     },
 
@@ -430,40 +443,75 @@ async function migrateLegacyConfig() {
 }
 
 window.onload = async () => {
-    await migrateLegacyConfig();
-    
-    document.getElementById('repo-input').value = currentInstance.repo;
-    document.getElementById('exec-input').value = currentInstance.execPath;
-    document.getElementById('username-input').value = await Store.get('legacy_username', "");
-    document.getElementById('ip-input').value = currentInstance.ip;
-    document.getElementById('port-input').value = currentInstance.port;
-    document.getElementById('server-checkbox').checked = currentInstance.isServer;
-    document.getElementById('install-path-input').value = currentInstance.installPath;
-    
-    if (process.platform === 'linux' || process.platform === 'darwin') {
-        document.getElementById('compat-option-container').style.display = 'block';
-        scanCompatibilityLayers();
-    } else {
-        currentInstance.compatLayer = 'direct';
-        await saveInstancesToStore();
-    }
+    try {
+        await migrateLegacyConfig();
+        
+        const repoInput = document.getElementById('repo-input');
+        const execInput = document.getElementById('exec-input');
+        const usernameInput = document.getElementById('username-input');
+        const ipInput = document.getElementById('ip-input');
+        const portInput = document.getElementById('port-input');
+        const serverCheck = document.getElementById('server-checkbox');
+        const installInput = document.getElementById('install-path-input');
 
-    ipcRenderer.on('window-is-maximized', (event, isMaximized) => {
-        const btn = document.getElementById('maximize-btn');
-        if (btn) btn.textContent = isMaximized ? '❐' : '▢';
-    });
-
-    fetchGitHubData();
-    checkForLauncherUpdates();
-    loadSplashText();
-    MusicManager.init();
-    GamepadManager.init();
-
-    window.addEventListener('keydown', (e) => {
-        if (e.key === 'F9') {
-            checkForLauncherUpdates(true);
+        if (repoInput) repoInput.value = currentInstance.repo;
+        if (execInput) execInput.value = currentInstance.execPath;
+        if (usernameInput) usernameInput.value = await Store.get('legacy_username', "");
+        if (ipInput) ipInput.value = currentInstance.ip;
+        if (portInput) portInput.value = currentInstance.port;
+        if (serverCheck) serverCheck.checked = currentInstance.isServer;
+        if (installInput) installInput.value = currentInstance.installPath;
+        
+        if (process.platform === 'linux' || process.platform === 'darwin') {
+            const compatContainer = document.getElementById('compat-option-container');
+            if (compatContainer) {
+                compatContainer.style.display = 'block';
+                scanCompatibilityLayers();
+            }
+        } else {
+            currentInstance.compatLayer = 'direct';
+            await saveInstancesToStore();
         }
-    });
+
+        ipcRenderer.on('window-is-maximized', (event, isMaximized) => {
+            const btn = document.getElementById('maximize-btn');
+            if (btn) btn.textContent = isMaximized ? '❐' : '▢';
+        });
+
+        // Initialize features
+        fetchGitHubData();
+        checkForLauncherUpdates();
+        loadSplashText();
+        MusicManager.init();
+        GamepadManager.init();
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'F9') {
+                checkForLauncherUpdates(true);
+            }
+        });
+
+        window.addEventListener('online', () => {
+            document.getElementById('offline-indicator').style.display = 'none';
+            showToast("Back Online! Refreshing...");
+            fetchGitHubData();
+        });
+
+        window.addEventListener('offline', () => {
+            document.getElementById('offline-indicator').style.display = 'block';
+            showToast("Connection Lost. Entering Offline Mode.");
+        });
+
+        if (!navigator.onLine) {
+            document.getElementById('offline-indicator').style.display = 'block';
+        }
+    } catch (e) {
+        console.error("Startup error:", e);
+        // Hide loader anyway so user isn't stuck
+        const loader = document.getElementById('loader');
+        if (loader) loader.style.display = 'none';
+        showToast("Error during startup: " + e.message);
+    }
 };
 
 async function saveInstancesToStore() {
@@ -509,6 +557,7 @@ async function renderInstancesList() {
                 <span class="text-gray-500 text-xs">${inst.installPath}</span>
             </div>
             <div class="flex gap-2">
+                <div class="btn-mc !w-[100px] !h-[40px] !text-lg !mb-0" onclick="openSnapshotsManager('${inst.id}')">BACKUPS</div>
                 ${!isActive ? `<div class="btn-mc !w-[100px] !h-[40px] !text-lg !mb-0" onclick="switchInstance('${inst.id}')">SWITCH</div>` : ''}
                 <div class="btn-mc !w-[100px] !h-[40px] !text-lg !mb-0" onclick="deleteInstance('${inst.id}')" style="${isActive ? 'opacity: 0.5; pointer-events: none;' : ''}">DELETE</div>
             </div>
@@ -645,6 +694,19 @@ async function updatePlayButtonText() {
         btn.classList.remove('running');
     }
 
+    // Offline / No Data Case
+    if (releasesData.length === 0) {
+        const fullPath = await getInstalledPath();
+        if (currentInstance.installedTag && fs.existsSync(fullPath)) {
+            btn.textContent = "PLAY";
+            btn.classList.remove('disabled');
+        } else {
+            btn.textContent = "OFFLINE";
+            btn.classList.add('disabled');
+        }
+        return;
+    }
+
     const release = releasesData[currentReleaseIndex];
     if (!release) {
         btn.textContent = "PLAY";
@@ -704,8 +766,25 @@ async function fetchGitHubData() {
     const repo = currentInstance.repo;
     const loader = document.getElementById('loader');
     const loaderText = document.getElementById('loader-text');
+    const offlineInd = document.getElementById('offline-indicator');
+
     if (loader) loader.style.display = 'flex';
     if (loaderText) loaderText.textContent = "SYNCING: " + repo;
+
+    const hideLoader = () => {
+        if (loader) {
+            loader.style.opacity = '0';
+            setTimeout(() => { loader.style.display = 'none'; }, 300);
+        }
+    };
+
+    if (!navigator.onLine) {
+        console.log("Offline detected, skipping GitHub sync.");
+        if (offlineInd) offlineInd.style.display = 'block';
+        handleOfflineData();
+        setTimeout(hideLoader, 500);
+        return;
+    }
 
     try {
         const [relRes, commRes] = await Promise.all([
@@ -721,22 +800,25 @@ async function fetchGitHubData() {
         populateVersions();
         populateUpdatesSidebar();
 
-        setTimeout(() => {
-            if (loader) {
-                loader.style.opacity = '0';
-                setTimeout(() => loader.style.display = 'none', 300);
-            }
-        }, 500);
+        setTimeout(hideLoader, 500);
     } catch (err) {
+        console.error("Fetch error:", err);
         if (loaderText) loaderText.textContent = "REPO NOT FOUND OR API ERROR";
-        showToast("Check repository name in Options.");
-        setTimeout(() => {
-            if (loader) {
-                loader.style.opacity = '0';
-                setTimeout(() => loader.style.display = 'none', 300);
-            }
-        }, 2500);
+        
+        // Even if we fail due to some API error, we should still allow offline play if installed
+        handleOfflineData();
+        
+        showToast("Entering Offline Mode.");
+        if (offlineInd) offlineInd.style.display = 'block';
+        setTimeout(hideLoader, 2500);
     }
+}
+
+function handleOfflineData() {
+    releasesData = [];
+    commitsData = [];
+    populateVersions();
+    populateUpdatesSidebar();
 }
 
 function populateVersions() {
@@ -746,7 +828,17 @@ function populateVersions() {
     select.innerHTML = '';
 
     if(releasesData.length === 0) {
-        if (display) display.textContent = "No Releases Found";
+        // Check if we have a local version installed
+        if (currentInstance.installedTag) {
+            const opt = document.createElement('option');
+            opt.value = 0;
+            opt.textContent = `Installed (${currentInstance.installedTag})`;
+            select.appendChild(opt);
+            if (display) display.textContent = opt.textContent;
+        } else {
+            if (display) display.textContent = "No Connection / No Install";
+        }
+        updatePlayButtonText();
         return;
     }
 
@@ -798,6 +890,20 @@ function updateSelectedRelease() {
 
 async function launchGame() {
     if (isProcessing || isGameRunning) return;
+
+    if (!navigator.onLine || releasesData.length === 0) {
+        const fullPath = await getInstalledPath();
+        if (currentInstance.installedTag && fs.existsSync(fullPath)) {
+            setProcessingState(true);
+            updateProgress(100, "Offline Launch...");
+            await launchLocalClient();
+            setProcessingState(false);
+        } else {
+            showToast("You need an internet connection to install the game!");
+        }
+        return;
+    }
+
     const release = releasesData[currentReleaseIndex];
     if (!release) return;
     const asset = release.assets.find(a => a.name === TARGET_FILE);
@@ -893,7 +999,6 @@ async function launchLocalClient() {
         try { fs.chmodSync(fullPath, 0o755); } catch (e) { console.warn("Failed to set executable permissions:", e); }
     }
     return new Promise(async (resolve, reject) => {
-        const compat = currentInstance.compatLayer;
         const username = await Store.get('legacy_username', "");
         const ip = currentInstance.ip;
         const port = currentInstance.port;
@@ -906,8 +1011,13 @@ async function launchLocalClient() {
         const argString = args.map(a => `"${a}"`).join(" ");
         let cmd = `"${fullPath}" ${argString}`;
         if (process.platform === 'linux' || process.platform === 'darwin') {
+            let compat = currentInstance.compatLayer;
+            if (compat === 'custom' && currentInstance.customCompatPath) {
+                compat = currentInstance.customCompatPath;
+            }
+            
             if (compat === 'wine64' || compat === 'wine') cmd = `${compat} "${fullPath}" ${argString}`;
-            else if (compat.includes('Proton')) {
+            else if (compat.includes('Proton') || compat.includes('/proton') || (currentInstance.compatLayer === 'custom' && currentInstance.customCompatPath)) {
                 const prefix = path.join(path.dirname(fullPath), 'pfx');
                 if (!fs.existsSync(prefix)) fs.mkdirSync(prefix, { recursive: true });
                 cmd = `STEAM_COMPAT_CLIENT_INSTALL_PATH="" STEAM_COMPAT_DATA_PATH="${prefix}" "${compat}" run "${fullPath}" ${argString}`;
@@ -953,6 +1063,13 @@ async function handleElectronFlow(url) {
         const parentDir = path.dirname(extractDir);
         const zipPath = path.join(parentDir, TARGET_FILE);
         const backupDir = path.join(parentDir, 'LegacyClient_Backup');
+
+        // Snapshot before update
+        if (fs.existsSync(extractDir)) {
+            updateProgress(0, "Snapshotting Instance...");
+            await createSnapshot(currentInstance);
+        }
+
         updateProgress(5, "Downloading " + TARGET_FILE + "...");
         await downloadFile(url, zipPath);
         updateProgress(75, "Extracting Archive...");
@@ -1108,6 +1225,7 @@ async function saveOptions() {
     const ip = document.getElementById('ip-input').value.trim();
     const port = document.getElementById('port-input').value.trim();
     const isServer = document.getElementById('server-checkbox').checked;
+    const customProtonPath = document.getElementById('custom-proton-path').value.trim();
     const newInstallPath = document.getElementById('install-path-input').value.trim();
     const oldInstallPath = currentInstance.installPath;
     if (newInstallPath && newInstallPath !== oldInstallPath) {
@@ -1124,7 +1242,10 @@ async function saveOptions() {
     if (newRepo) currentInstance.repo = newRepo;
     if (newExec) currentInstance.execPath = newExec;
     currentInstance.ip = ip; currentInstance.port = port; currentInstance.isServer = isServer;
-    if (compatSelect) currentInstance.compatLayer = compatSelect.value;
+    if (compatSelect) {
+        currentInstance.compatLayer = compatSelect.value;
+        currentInstance.customCompatPath = customProtonPath;
+    }
     await saveInstancesToStore(); toggleOptions(false); fetchGitHubData(); updatePlayButtonText(); showToast("Settings Saved");
 }
 
@@ -1149,6 +1270,10 @@ function scanCompatibilityLayers() {
     const select = document.getElementById('compat-select'); if (!select) return;
     const savedValue = currentInstance.compatLayer;
     const layers = [{ name: 'Default (Direct)', cmd: 'direct' }, { name: 'Wine64', cmd: 'wine64' }, { name: 'Wine', cmd: 'wine' }];
+    
+    // Add custom option
+    layers.push({ name: 'Custom (Linux)', cmd: 'custom' });
+    
     const homeDir = require('os').homedir(); let steamPaths = [];
     if (process.platform === 'linux') steamPaths = [path.join(homeDir, '.steam', 'steam', 'steamapps', 'common'), path.join(homeDir, '.local', 'share', 'Steam', 'steamapps', 'common'), path.join(homeDir, '.var', 'app', 'com.valvesoftware.Steam', 'data', 'Steam', 'steamapps', 'common')];
     else if (process.platform === 'darwin') steamPaths = [path.join(homeDir, 'Library', 'Application Support', 'Steam', 'steamapps', 'common')];
@@ -1158,11 +1283,18 @@ function scanCompatibilityLayers() {
     select.innerHTML = '';
     layers.forEach(l => { const opt = document.createElement('option'); opt.value = l.cmd; opt.textContent = l.name; select.appendChild(opt); if (l.cmd === savedValue) opt.selected = true; });
     updateCompatDisplay();
+    
+    const customPathInput = document.getElementById('custom-proton-path');
+    if (customPathInput) customPathInput.value = currentInstance.customCompatPath || "";
 }
 
 function updateCompatDisplay() {
     const select = document.getElementById('compat-select'); const display = document.getElementById('current-compat-display');
-    if (select && display && select.selectedIndex !== -1) display.textContent = select.options[select.selectedIndex].text;
+    const customGroup = document.getElementById('custom-proton-group');
+    if (select && display && select.selectedIndex !== -1) {
+        display.textContent = select.options[select.selectedIndex].text;
+        if (customGroup) customGroup.style.display = select.value === 'custom' ? 'block' : 'none';
+    }
 }
 
 function toggleSidebar() {
@@ -1253,6 +1385,154 @@ async function loadSplashText() {
     }
 }
 
+async function toggleSnapshots(show, id = null) {
+    const modal = document.getElementById('snapshots-modal');
+    if (show) {
+        snapshotInstanceId = id || currentInstanceId;
+        const inst = instances.find(i => i.id === snapshotInstanceId);
+        document.getElementById('snapshot-instance-name').textContent = inst ? inst.name : "";
+        await renderSnapshotsList();
+        document.activeElement?.blur();
+        modal.style.display = 'flex';
+        modal.style.opacity = '1';
+    } else {
+        modal.style.opacity = '0';
+        setTimeout(() => modal.style.display = 'none', 300);
+    }
+}
+
+async function renderSnapshotsList() {
+    const container = document.getElementById('snapshots-list-container');
+    container.innerHTML = '';
+    const inst = instances.find(i => i.id === snapshotInstanceId);
+    if (!inst || !inst.snapshots || inst.snapshots.length === 0) {
+        container.innerHTML = '<div class="text-center text-gray-400 py-4">No snapshots found.</div>';
+        return;
+    }
+
+    inst.snapshots.sort((a,b) => b.timestamp - a.timestamp).forEach((snap) => {
+        const item = document.createElement('div');
+        item.className = 'flex justify-between items-center p-3 border-b border-[#333] hover:bg-[#111]';
+        const date = new Date(snap.timestamp).toLocaleString();
+        item.innerHTML = `
+            <div class="flex flex-col">
+                <span class="text-white text-lg font-bold">${snap.tag || 'Unknown Version'}</span>
+                <span class="text-gray-400 text-sm">${date}</span>
+            </div>
+            <div class="flex gap-2">
+                <div class="btn-mc !w-[100px] !h-[40px] !text-lg !mb-0" onclick="rollbackToSnapshot('${snap.id}')">ROLLBACK</div>
+                <div class="btn-mc !w-[100px] !h-[40px] !text-lg !mb-0" onclick="deleteSnapshot('${snap.id}')">DELETE</div>
+            </div>
+        `;
+        container.appendChild(item);
+    });
+}
+
+function openSnapshotsManager(id) {
+    toggleSnapshots(true, id);
+}
+
+async function createSnapshotManual() {
+    const inst = instances.find(i => i.id === snapshotInstanceId);
+    if (!inst) return;
+    setProcessingState(true);
+    updateProgress(0, "Creating Snapshot...");
+    try {
+        await createSnapshot(inst);
+        showToast("Snapshot Created!");
+        await renderSnapshotsList();
+    } catch (e) {
+        showToast("Failed to create snapshot: " + e.message);
+    }
+    setProcessingState(false);
+}
+
+async function createSnapshot(inst) {
+    if (!fs.existsSync(inst.installPath)) return;
+    
+    const snapshotId = 'snap-' + Date.now();
+    const snapshotsDir = path.join(path.dirname(inst.installPath), 'Snapshots', inst.id);
+    if (!fs.existsSync(snapshotsDir)) fs.mkdirSync(snapshotsDir, { recursive: true });
+    
+    const dest = path.join(snapshotsDir, snapshotId);
+    
+    // Copy entire folder. fs.cpSync is available in modern Node/Electron
+    fs.cpSync(inst.installPath, dest, { recursive: true });
+    
+    if (!inst.snapshots) inst.snapshots = [];
+    inst.snapshots.push({
+        id: snapshotId,
+        timestamp: Date.now(),
+        tag: inst.installedTag || 'Manual Snapshot',
+        path: dest
+    });
+    
+    await saveInstancesToStore();
+}
+
+async function rollbackToSnapshot(snapId) {
+    const inst = instances.find(i => i.id === snapshotInstanceId);
+    if (!inst) return;
+    const snap = inst.snapshots.find(s => s.id === snapId);
+    if (!snap) return;
+
+    if (!confirm(`Are you sure you want to ROLLBACK ${inst.name} to the snapshot from ${new Date(snap.timestamp).toLocaleString()}? This will overwrite your current files.`)) return;
+
+    setProcessingState(true);
+    updateProgress(10, "Preparing Rollback...");
+
+    try {
+        if (fs.existsSync(inst.installPath)) {
+            // Move current to temp just in case
+            const temp = inst.installPath + "_rollback_temp";
+            if (fs.existsSync(temp)) fs.rmSync(temp, { recursive: true, force: true });
+            fs.renameSync(inst.installPath, temp);
+        }
+
+        updateProgress(50, "Restoring Files...");
+        fs.cpSync(snap.path, inst.installPath, { recursive: true });
+        
+        inst.installedTag = snap.tag;
+        await saveInstancesToStore();
+        
+        // Cleanup temp
+        const temp = inst.installPath + "_rollback_temp";
+        if (fs.existsSync(temp)) fs.rmSync(temp, { recursive: true, force: true });
+
+        showToast("Rollback Successful!");
+        if (snapshotInstanceId === currentInstanceId) {
+            updatePlayButtonText();
+            if (window.loadMainMenuSkin) window.loadMainMenuSkin();
+        }
+    } catch (e) {
+        showToast("Rollback Failed: " + e.message);
+        console.error(e);
+    }
+    setProcessingState(false);
+}
+
+async function deleteSnapshot(snapId) {
+    const inst = instances.find(i => i.id === snapshotInstanceId);
+    if (!inst) return;
+    const snapIndex = inst.snapshots.findIndex(s => s.id === snapId);
+    if (snapIndex === -1) return;
+    
+    if (!confirm("Delete this snapshot? (This will free up disk space)")) return;
+
+    try {
+        const snap = inst.snapshots[snapIndex];
+        if (fs.existsSync(snap.path)) {
+            fs.rmSync(snap.path, { recursive: true, force: true });
+        }
+        inst.snapshots.splice(snapIndex, 1);
+        await saveInstancesToStore();
+        renderSnapshotsList();
+        showToast("Snapshot Deleted");
+    } catch (e) {
+        showToast("Error deleting snapshot: " + e.message);
+    }
+}
+
 // Global functions for HTML onclick
 window.toggleSidebar = toggleSidebar;
 window.minimizeWindow = minimizeWindow;
@@ -1280,3 +1560,37 @@ window.saveNewInstance = saveNewInstance;
 window.switchInstance = switchInstance;
 window.deleteInstance = deleteInstance;
 window.toggleAddInstance = toggleAddInstance;
+window.openSnapshotsManager = openSnapshotsManager;
+window.rollbackToSnapshot = rollbackToSnapshot;
+window.deleteSnapshot = deleteSnapshot;
+window.createSnapshotManual = createSnapshotManual;
+window.toggleSnapshots = toggleSnapshots;
+// Desktop shortcut for Linux AppImage
+function ensureDesktopShortcut() {
+  if (typeof process === 'undefined' || process.platform !== 'linux') return;
+  try {
+    const os = require('os');
+    const fs = require('fs');
+    const path = require('path');
+    const home = os.homedir();
+    const desktopDir = path.join(home, '.local', 'share', 'applications');
+    const desktopPath = path.join(desktopDir, 'LegacyLauncher.desktop');
+    if (fs.existsSync(desktopPath)) return;
+    const appPath = process.env.APPIMAGE || process.argv[0];
+    if (!appPath) return;
+    const content = `[Desktop Entry]
+Type=Application
+Name=LegacyLauncher
+Comment=LegacyLauncher AppImage
+Exec="${appPath}" %U
+Icon=LegacyLauncher
+Terminal=false
+Categories=Game;Emulation;`;
+    fs.mkdirSync(desktopDir, { recursive: true });
+    fs.writeFileSync(desktopPath, content);
+  } catch (e) {
+    console.error('Failed to create desktop shortcut:', e);
+  }
+}
+// Ensure shortcut exists on startup
+ensureDesktopShortcut();

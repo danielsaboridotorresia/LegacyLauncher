@@ -102,7 +102,10 @@ function initMainMenuSkinViewer() {
 
 async function loadMainMenuSkin() {
     try {
+        // Ensure install dir is available (currentInstance might not be ready)
         const installDir = await window.getInstallDir();
+        if (!installDir) return;
+        
         const skinPath = path.join(installDir, 'Common', 'res', 'mob', 'char.png');
         
         if (fs.existsSync(skinPath)) {
@@ -120,7 +123,7 @@ async function loadMainMenuSkin() {
             console.log("No skin found at " + skinPath);
         }
     } catch (e) {
-        console.error("Failed to load main menu skin:", e);
+        console.warn("Could not load main menu skin (startup race condition?):", e);
     }
 }
 

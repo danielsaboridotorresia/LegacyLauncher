@@ -61,7 +61,7 @@ jobs:
           if-no-files-found: error
 
   build-mac:
-    name: Build macOS DMG
+    name: Build macOS DMG (Apple Silicon)
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -84,9 +84,33 @@ jobs:
           path: dist/*.dmg
           if-no-files-found: error
 
+  build-mac-intel:
+    name: Build macOS DMG (Intel)
+    runs-on: macos-13
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+      - name: Install dependencies
+        run: npm ci
+      - name: Build macOS DMG (Intel)
+        run: npm run dist:mac
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload macOS Intel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-intel-dist
+          path: dist/*.dmg
+          if-no-files-found: error
+
   release:
     name: Create GitHub Release
-    needs: [build-linux, build-windows, build-mac]
+    needs: [build-linux, build-windows, build-mac, build-mac-intel]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -104,5 +128,6 @@ jobs:
             artifacts/linux-dist/*
             artifacts/windows-dist/*
             artifacts/mac-dist/*
+            artifacts/mac-intel-dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -10,6 +10,14 @@ const DEFAULT_EXEC = "Minecraft.Client.exe";
 const TARGET_FILE = "LCEWindows64.zip";
 const LAUNCHER_REPO = "gradenGnostic/LegacyLauncher";
 
+function resolveWineBinaryMac (kind = 'wine') {
+    const candidates = kind === 'wine64'
+        ? ['/opt/homebrew/bin/wine64', '/usr/local/bin/wine64']
+        : ['/opt/homebrew/bin/wine', '/usr/local/bin/wine'];
+
+        return candidates.find((p) => fs.existsSync(p)) || null;
+}
+
 let instances = [];
 let currentInstanceId = null;
 let currentInstance = null;
@@ -469,8 +477,8 @@ window.onload = async () => {
         if (process.platform === 'linux' || process.platform === 'darwin') {
             const compatContainer = document.getElementById('compat-option-container');
             if (compatContainer) {
-                compatContainer.style.display = 'block';
-                scanCompatibilityLayers();
+              compatContainer.style.display = 'block';
+              scanCompatibilityLayers();
             }
         } else {
             currentInstance.compatLayer = 'direct';
@@ -998,46 +1006,114 @@ async function checkForUpdatesManual() {
 
 async function launchLocalClient() {
     const fullPath = await getInstalledPath();
-    if (!fs.existsSync(fullPath)) throw new Error("Executable not found! Try reinstalling.");
+
+    if (!fs.existsSync(fullPath)) {
+        throw new Error("Executable not found! Try reinstalling.");
+    }
+
     if (process.platform === 'darwin' && isWisndowBinary(fullPath) && currentInstance.compactLayer === 'direct') {
         showToast("Cannot launch Windows executables directly on MacOS. Please select Wjne or Proton in Options.");
         throw new Error("Windows binary (.exe) cannot run directly on MacOS. Please use Wine or Proton compatibility layer")
     }
+
     if (process.platform !== 'win32') {
-        try { fs.chmodSync(fullPath, 0o755); } catch (e) { console.warn("Failed to set executable permissions:", e); }
+        try { 
+            fs.chmodSync(fullPath, 0o755); 
+        } catch (e) { 
+            console.warn("Failed to set executable permissions:", e); 
+        }
     }
+
     return new Promise(async (resolve, reject) => {
         const username = await Store.get('legacy_username', "");
         const ip = currentInstance.ip;
         const port = currentInstance.port;
         const isServer = currentInstance.isServer;
+
         let args = [];
         if (username) args.push("-name", username);
         if (isServer) args.push("-server");
         if (ip) args.push("-ip", ip);
         if (port) args.push("-port", port);
-        const argString = args.map(a => `"${a}"`).join(" ");
-        let cmd = `"${fullPath}" ${argString}`;
-        if (process.platform === 'linux' || process.platform === 'darwin') {
-            let compat = currentInstance.compatLayer;
-            if (compat === 'custom' && currentInstance.customCompatPath) {
-                compat = currentInstance.customCompatPath;
+
+        let proc;
+
+        if (process.platform === 'win32') {
+            proc = childProcess.spawn(fullPath, args, {
+                detached: false,
+                stdio: 'ignore'
+            });
+        } else if (process.platform === 'linux') {
+            let compat = currentInstance.compactLayer || 'direct';
+
+            if (compact === 'direct') {
+                proc = childProcess.spawn(fullPath, args, {
+                    detached: false,
+                    stdio: 'ignore'
+                });
+            } else if (compat === 'custom' && currentInstance.customCompatPath) {
+                proc = childProcess.spawn(currentInstance.customCompatPath, [fullPath, ...args], {
+                    detached: false,
+                    stdio: 'ignore'
+                });
+            } else if (compat === 'wine' || compat === 'wine64') {
+                proc = childProcess.spawn(compat, [fullPath, ...args], {
+                    detached: false,
+                    stdio: 'ignore'
+                });
+            } else {
+                throw new Error(`Unsupported compatibility layer: ${compat}`)
             }
-            
-            if (compat === 'wine64' || compat === 'wine') cmd = `${compat} "${fullPath}" ${argString}`;
-            else if (compat.includes('Proton') || compat.includes('/proton') || (currentInstance.compatLayer === 'custom' && currentInstance.customCompatPath)) {
-                const prefix = path.join(path.dirname(fullPath), 'pfx');
-                if (!fs.existsSync(prefix)) fs.mkdirSync(prefix, { recursive: true });
-                cmd = `STEAM_COMPAT_CLIENT_INSTALL_PATH="" STEAM_COMPAT_DATA_PATH="${prefix}" "${compat}" run "${fullPath}" ${argString}`;
+        } else if (process.platform === 'darwin') {
+            let compat = currentInstance.compactLayer || 'direct';
+
+            if (compat === 'direct') {
+                throw new Error(
+                    "Direct launch is not supported on MacOS, use Wine/Wine64 or Custom to launch (check options)."
+                );
+            } else if (compat === 'custom' && currentInstance.customCompatPath) {
+                proc = childProcess.spawn(currentInstance.customCompatPath, [fullpath, ...args], {
+                    detached: false,
+                    stdio: 'ignore'
+                });
+            } else if (compat === 'wine' && compat === 'wine64') {
+                const wineBin = resolveWineBinaryMac(compat);
+
+                if (!wineBin) {
+                    throw new Error(`Could not find ${compat} on MacOS. Install it or use a custom compatibility path.`);
+                }
+                
+                proc = childProcess.spawn(wineBin, [fullPath, ...args], {
+                    detached: false,
+                    stdio: 'ignore'
+                });
+            } else {
+                throw new Error(`Unsupported compatibility layer on MacOS: ${compat}`);
             }
+        } else  {
+            throw new Error(`Unsupported platform: ${process.platform}`);
         }
+
         const startTime = Date.now();
-        const proc = childProcess.exec(cmd, (error) => {
-            const duration = Date.now() - startTime;
-            if (error && duration < 2000) { showToast("Failed to launch: " + error.message); reject(error); }
-            else resolve();
+
+        proc.on('error', (error) => {
+            showToast("Failed to launch: " + error.message);
+            reject(error);
         });
+
+        proc.on('spawn', () => {
+            resolve();
+        });
+
+        proc.on('exit', (code) => {
+            const duration = Date.now() - startTime;
+            if (duration < 2000 && code && code !== 0) {
+                reject(new Error(`Process exited too quickly with code ${code}`));
+            }
+        });
+
         monitorProcess(proc);
+        proc.unref();
     });
 }
 
@@ -1287,15 +1363,26 @@ function showToast(msg) {
 async function toggleMusic() { await MusicManager.toggle(); }
 
  async function scanCompatibilityLayers() {
-    const select = document.getElementById('compat-select'); if (!select) return;
+    const select = document.getElementById('compat-select'); 
+    if (!select) return;
+
     const savedValue = currentInstance.compatLayer;
-    const layers = [{ name: 'Default (Direct)', cmd: 'direct' }, { name: 'Wine64', cmd: 'wine64' }, { name: 'Wine', cmd: 'wine' }];
+    const layers = [{ name: 'Default (Direct)', cmd: 'direct'}];
+
+    if (process.platform === 'linux') {
+        layers.push({name: 'Wine64', cmd: 'wine64'});
+        layers.push({name: 'Wine', cmd: 'wine'});
+        layers.push({name: 'Custom', cmd: 'custom'});
+    }
     
     if (process.platform === 'darwin') {
-        const fullPath = await getInstalledPath();
-        if (isWindowBinary(fullPath)) {
-            layers = layers.filter(l => l.cmd !== 'direct');
-        }
+        const wine64 = ['/opt/homebrew/bin/wine64', '/usr/local/bin/wine64'].find(fs.existsSync);
+        const wine = ['/opt/homebrew/bin/wine', '/usr/local/bin/wine'].find(fs.existsSync);
+
+        if (wine64) layers.push({ name: 'Wine64', cmd: 'wine64' });
+        if (wine64) layers.push({ name: 'Wine', cmd: 'wine' });
+
+        layers-push({ name: 'Custom', cmd: 'custom' })
     }
 
     // Add custom option

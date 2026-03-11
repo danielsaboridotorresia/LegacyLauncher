@@ -297,6 +297,10 @@ const GamepadManager = {
             const sidebar = document.getElementById('updates-list')?.parentElement;
             if (sidebar) sidebar.scrollTop += val;
         }
+    },
+
+    isWindowBinary(filePath) {
+        return filePath.toLowerCase().endsWith('.exe');
     }
 };
 
@@ -995,6 +999,10 @@ async function checkForUpdatesManual() {
 async function launchLocalClient() {
     const fullPath = await getInstalledPath();
     if (!fs.existsSync(fullPath)) throw new Error("Executable not found! Try reinstalling.");
+    if (process.platform === 'darwin' && isWisndowBinary(fullPath) && currentInstance.compactLayer === 'direct') {
+        showToast("Cannot launch Windows executables directly on MacOS. Please select Wjne or Proton in Options.");
+        throw new Error("Windows binary (.exe) cannot run directly on MacOS. Please use Wine or Proton compatibility layer")
+    }
     if (process.platform !== 'win32') {
         try { fs.chmodSync(fullPath, 0o755); } catch (e) { console.warn("Failed to set executable permissions:", e); }
     }
@@ -1278,11 +1286,18 @@ function showToast(msg) {
 
 async function toggleMusic() { await MusicManager.toggle(); }
 
-function scanCompatibilityLayers() {
+ async function scanCompatibilityLayers() {
     const select = document.getElementById('compat-select'); if (!select) return;
     const savedValue = currentInstance.compatLayer;
     const layers = [{ name: 'Default (Direct)', cmd: 'direct' }, { name: 'Wine64', cmd: 'wine64' }, { name: 'Wine', cmd: 'wine' }];
     
+    if (process.platform === 'darwin') {
+        const fullPath = await getInstalledPath();
+        if (isWindowBinary(fullPath)) {
+            layers = layers.filter(l => l.cmd !== 'direct');
+        }
+    }
+
     // Add custom option
     layers.push({ name: 'Custom (Linux)', cmd: 'custom' });
     
